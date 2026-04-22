@@ -147,10 +147,23 @@ void D3D12HelloTriangle::LoadAssets()
 {
     // Root Signature
     {
-        CD3DX12_ROOT_PARAMETER rootParameters[1];
-        rootParameters[0].InitAsConstantBufferView(0);
+        CD3DX12_ROOT_PARAMETER rootParameters[3];
+        rootParameters[0].InitAsConstantBufferView(0);//b0 cbv
+
+        CD3DX12_DESCRIPTOR_RANGE srvRange;
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0);//t0
+        rootParameters[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
+        rootParameters[2].InitAsConstantBufferView(1); // b1 涟漪CB
+        CD3DX12_STATIC_SAMPLER_DESC sampler(
+            0, 
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP, //u
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP, //v
+            D3D12_TEXTURE_ADDRESS_MODE_WRAP  //w
+            );
+
         CD3DX12_ROOT_SIGNATURE_DESC rootSignatureDesc;
-        rootSignatureDesc.Init(1, rootParameters, 0, nullptr,
+        rootSignatureDesc.Init(3, rootParameters, 1, &sampler,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
         ComPtr<ID3DBlob> signature, error;
         ThrowIfFailed(D3D12SerializeRootSignature(&rootSignatureDesc,
@@ -159,6 +172,31 @@ void D3D12HelloTriangle::LoadAssets()
             signature->GetBufferPointer(), signature->GetBufferSize(),
             IID_PPV_ARGS(&m_rootSignature)));
     }
+
+    // 读取Phillips CS
+    UINT8* pPhillipsCSData = nullptr;
+    UINT   phillipsCsLen = 0;
+    ThrowIfFailed(ReadDataFromFile(
+        GetAssetFullPath(L"PhillipsCS.cso").c_str(),
+        &pPhillipsCSData, &phillipsCsLen));
+
+    // 读取时域演化CS和IFFT CS
+    UINT8* pTimeEvoCSData = nullptr;
+    UINT8* pIFFTCSData = nullptr;
+    UINT   timeEvoCsLen = 0, ifftCsLen = 0;
+
+    ThrowIfFailed(ReadDataFromFile(
+        GetAssetFullPath(L"TimeEvolutionCS.cso").c_str(),
+        &pTimeEvoCSData, &timeEvoCsLen));
+    ThrowIfFailed(ReadDataFromFile(
+        GetAssetFullPath(L"IFFTCS.cso").c_str(),
+        &pIFFTCSData, &ifftCsLen));
+    m_oceanFFT = std::make_unique<OceanFFT>();
+    m_oceanFFT->Init(
+        m_device, m_commandQueue, 256,
+        pPhillipsCSData, phillipsCsLen,
+        pTimeEvoCSData, timeEvoCsLen,   
+        pIFFTCSData, ifftCsLen);     
 
     // 读取Shader字节码
     UINT8* pVertexShaderData = nullptr;
@@ -171,6 +209,16 @@ void D3D12HelloTriangle::LoadAssets()
         GetAssetFullPath(L"shaders_PSMain.cso").c_str(),
         &pPixelShaderData, &psLen));
 
+	// 读取水体边界Shader字节码
+    UINT8* pBoxVSData = nullptr;
+    UINT8* pBoxPSData = nullptr;
+    UINT   boxVsLen = 0, boxPsLen = 0;
+    ThrowIfFailed(ReadDataFromFile(
+        GetAssetFullPath(L"waterbody_VSMain.cso").c_str(),
+        &pBoxVSData, &boxVsLen));
+    ThrowIfFailed(ReadDataFromFile(
+        GetAssetFullPath(L"waterbody_PSMain.cso").c_str(),
+        &pBoxPSData, &boxPsLen));
 
         //创建PSO（此时还没有CommandList）
         m_renderer = std::make_unique<Renderer>();
@@ -178,7 +226,9 @@ void D3D12HelloTriangle::LoadAssets()
             m_device, m_rootSignature,
             m_width, m_height,
             pVertexShaderData, vsLen,
-            pPixelShaderData, psLen);
+            pPixelShaderData, psLen,
+            pBoxVSData, boxVsLen,
+            pBoxPSData, boxPsLen);
 
 
         // 读取天空Shader字节码
@@ -199,12 +249,31 @@ void D3D12HelloTriangle::LoadAssets()
             pSkyVSData, skyVsLen,
             pSkyPSData, skyPsLen);
 
+        UINT8* pRainVSData = nullptr;
+        UINT8* pRainPSData = nullptr;
+        UINT   rainVsLen = 0, rainPsLen = 0;
+        ThrowIfFailed(ReadDataFromFile(
+            GetAssetFullPath(L"rain_VSMain.cso").c_str(),
+            &pRainVSData, &rainVsLen));
+        ThrowIfFailed(ReadDataFromFile(
+            GetAssetFullPath(L"rain_PSMain.cso").c_str(),
+            &pRainPSData, &rainPsLen));
+
+        m_rainSystem = std::make_unique<RainSystem>();
+        m_rainSystem->Init(m_device, m_rootSignature,
+            pRainVSData, rainVsLen,
+            pRainPSData, rainPsLen);
+        m_rainSystem->InitResources(m_commandList);
+
+
+        m_weatherSystem = std::make_unique<WeatherSystem>();
+        m_weatherSystem->Init(m_oceanFFT.get(),m_skyDome.get());
 
         // PSO创建CommandList）
         ThrowIfFailed(m_device->CreateCommandList(
             0, D3D12_COMMAND_LIST_TYPE_DIRECT,
             m_commandAllocator.Get(),
-            m_renderer->GetPSO(),   // 现在PSO已经存在了
+            m_renderer->GetPSO(),   
             IID_PPV_ARGS(&m_commandList)));
         //录制Grid上传命令
         m_skyDome->InitResources(m_commandList);
@@ -240,78 +309,113 @@ void D3D12HelloTriangle::OnUpdate()
 	// Update the scene.
 	auto currentTime = std::chrono::steady_clock::now();
 	float deltaTime = std::chrono::duration<float>(currentTime - m_lastTime).count();
+    float weatherIntensity = m_weatherSystem->GetWeatherIntensity();
 	m_lastTime = currentTime;
     m_skyDome->Update(deltaTime);
     m_renderer->Update(deltaTime);
+    m_weatherSystem->Update(deltaTime);
+    m_rainSystem->Update(deltaTime,weatherIntensity,
+        m_oceanFFT->windDirX, m_oceanFFT->windDirY);
 }
 
 // Render the scene.
 void D3D12HelloTriangle::OnRender()
 {
-    // Record all the commands we need to render the scene into the command list.
     ThrowIfFailed(m_commandAllocator->Reset());
     ThrowIfFailed(m_commandList->Reset(m_commandAllocator.Get(), nullptr));
 
+    // Compute Pass
+    m_oceanFFT->Dispatch(m_commandList,m_renderer->GetTime());
 
+    // UAV → SRV，让Wave Shader能采样
+    D3D12_RESOURCE_BARRIER toSRV[2] = {
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            m_oceanFFT->GetHeightMap(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            m_oceanFFT->GetDztMap(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE)
+    };
+    m_commandList->ResourceBarrier(2, toSRV);
+
+    // 构建ctx
     RenderContext ctx;
-
-    ctx.cmd          = m_commandList.Get();
+    ctx.cmd = m_commandList.Get();
     ctx.renderTarget = m_renderTargets[m_frameIndex].Get();
-
-    ctx.rtv          = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+    ctx.rtv = CD3DX12_CPU_DESCRIPTOR_HANDLE(
         m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
-        m_frameIndex,
-        m_rtvDescriptorSize);
+        m_frameIndex, m_rtvDescriptorSize);
+    ctx.viewport = m_viewport;
+    ctx.scissor = m_scissorRect;
+    ctx.dsv = m_renderer->GetDSVHeap()
+        ->GetCPUDescriptorHandleForHeapStart();
+    ctx.vb = m_renderer->GetGridVBView();
+    ctx.ib = m_renderer->GetGridIBView();
+    ctx.indexCount = m_renderer->GetGridIndexCount();
+    ctx.view = m_renderer->GetViewMatrix();
+    ctx.proj = m_renderer->GetProjMatrix();
 
-    ctx.viewport     = m_viewport;
-    ctx.scissor      = m_scissorRect;
-    ctx.dsv = m_renderer->GetDSVHeap()->GetCPUDescriptorHandleForHeapStart();
-
-    ctx.vb           = m_renderer->GetGridVBView();
-    ctx.ib           = m_renderer->GetGridIBView();
-    ctx.indexCount   = m_renderer->GetGridIndexCount();
-
-    // view/proj供SkyDome用
-    ctx.view = m_renderer->GetViewMatrix();  
-    ctx.proj = m_renderer->GetProjMatrix();  
-
-    // Barrier：Present → RenderTarget（只做一次）
+    // Present → RenderTarget
     auto barrierToRT = CD3DX12_RESOURCE_BARRIER::Transition(
         ctx.renderTarget,
         D3D12_RESOURCE_STATE_PRESENT,
         D3D12_RESOURCE_STATE_RENDER_TARGET);
     m_commandList->ResourceBarrier(1, &barrierToRT);
 
-    // 清屏和清深度（只做一次）
-    const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
     m_commandList->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
+    const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
     m_commandList->ClearRenderTargetView(ctx.rtv, clearColor, 0, nullptr);
     m_commandList->ClearDepthStencilView(
         ctx.dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-    // 第一步：画天空（深度不写入，始终在最远处）
     m_skyDome->Render(ctx);
-    // 第二步：画海浪（会正确遮挡天空）
-    m_renderer->Render(ctx);
 
-    // Barrier：RenderTarget → Present
+    ID3D12DescriptorHeap* srvHeaps[] = { m_oceanFFT->GetSRVHeap() };
+    m_commandList->SetDescriptorHeaps(1, srvHeaps);
+    m_commandList->SetGraphicsRootDescriptorTable(1,
+    m_oceanFFT->GetSRVHeap()->GetGPUDescriptorHandleForHeapStart());
+    m_commandList->SetGraphicsRootConstantBufferView(
+        2, m_rainSystem->GetRippleCBAddress());
+
+    m_renderer->Render(ctx);
+    if (m_renderer->IsShowcaseMode())
+        m_renderer->RenderWaterBox(ctx);
+    m_rainSystem->Render(ctx,
+        m_renderer->GetViewMatrix(),
+        m_renderer->GetProjMatrix(),
+        m_renderer->GetCameraPos());
+
+    // RenderTarget → Present
     auto barrierToPresent = CD3DX12_RESOURCE_BARRIER::Transition(
         ctx.renderTarget,
         D3D12_RESOURCE_STATE_RENDER_TARGET,
         D3D12_RESOURCE_STATE_PRESENT);
     m_commandList->ResourceBarrier(1, &barrierToPresent);
 
-    ThrowIfFailed(m_commandList->Close());    // Execute the command list.
+    // SRV → UAV必须在Close之前录制
+    D3D12_RESOURCE_BARRIER toUAV[2] = {
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            m_oceanFFT->GetHeightMap(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            m_oceanFFT->GetDztMap(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+    };
+    m_commandList->ResourceBarrier(2, toUAV);
+
+    // Close之后才Execute
+    ThrowIfFailed(m_commandList->Close());
     ID3D12CommandList* ppCommandLists[] = { m_commandList.Get() };
-    m_commandQueue->ExecuteCommandLists(_countof(ppCommandLists), ppCommandLists);
+    m_commandQueue->ExecuteCommandLists(
+        _countof(ppCommandLists), ppCommandLists);
 
-    // Present the frame.
     ThrowIfFailed(m_swapChain->Present(1, 0));
-
     WaitForPreviousFrame();
-
 }
-
 void D3D12HelloTriangle::OnDestroy()
 {
     // Ensure that the GPU is no longer referencing resources that are about to be
@@ -326,50 +430,6 @@ void D3D12HelloTriangle::OnMouseMove(float dx, float dy)
     m_renderer->OnMouseMove(dx, dy);
 }
 
-//void D3D12HelloTriangle::PopulateCommandList()
-//{
-//    // Command list allocators can only be reset when the associated 
-//    // command lists have finished execution on the GPU; apps should use 
-//    // fences to determine GPU execution progress.
-//    ThrowIfFailed(m_commandAllocator->Reset());
-//
-//    // However, when ExecuteCommandList() is called on a particular command 
-//    // list, that command list can then be reset at any time and must be before 
-//    // re-recording.
-//    ThrowIfFailed(m_commandList->Reset(m_commandAllocator.Get(), m_pipelineState.Get()));
-//
-//    // Set necessary state.
-//    m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
-//    m_commandList->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress());
-//    m_commandList->RSSetViewports(1, &m_viewport);
-//    m_commandList->RSSetScissorRects(1, &m_scissorRect);
-//  
-//
-//    //
-//    // Indicate that the back buffer will be used as a render target.
-//    auto resourceBarrier = CD3DX12_RESOURCE_BARRIER::Transition(m_renderTargets[m_frameIndex].Get(),
-//		D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
-//    m_commandList->ResourceBarrier(1, &resourceBarrier);
-//
-//    CD3DX12_CPU_DESCRIPTOR_HANDLE rtvHandle(m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
-//        m_frameIndex, m_rtvDescriptorSize);
-//    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-//
-//    // Record commands.
-//    const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
-//    m_commandList->ClearRenderTargetView(rtvHandle, clearColor, 0, nullptr);
-//    m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-//    m_commandList->IASetVertexBuffers(0, 1, &m_vertexBufferView);
-//    m_commandList->IASetIndexBuffer(&m_indexBufferView);
-//    m_commandList->DrawIndexedInstanced(6, 1, 0, 0, 0);
-//
-//    // Indicate that the back buffer will now be used to present.
-//    auto presentResourceBarrier = CD3DX12_RESOURCE_BARRIER::Transition(m_renderTargets[m_frameIndex].Get(),
-//        D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
-//    m_commandList->ResourceBarrier(1, &presentResourceBarrier);
-//
-//    ThrowIfFailed(m_commandList->Close());
-//}
 
 void D3D12HelloTriangle::WaitForPreviousFrame()
 {
@@ -398,4 +458,35 @@ void D3D12HelloTriangle::OnKeyDown(UINT8 key)
     {
         m_renderer->ToggleWireframe();
     }
+
+    if (key == 'V')
+    {
+        if (m_renderer->IsShowcaseMode())
+        {
+            m_renderer->ToggleShowcase();
+            m_renderer->GetCamera().ExitShowcase();
+        }
+        else
+        {
+            m_renderer->ToggleShowcase();
+            m_renderer->GetCamera().EnterShowcase();
+        }
+    }
+    if (key == '1')
+    {
+        m_weatherSystem->SetAutoWeather(false);
+        m_weatherSystem->SetWeather(WeatherState::Calm, 5.0f);
+    }
+    if (key == '2')
+    {
+        m_weatherSystem->SetAutoWeather(false);
+        m_weatherSystem->SetWeather(WeatherState::Windy, 5.0f);
+    }
+    if (key == '3')
+    {
+        m_weatherSystem->SetAutoWeather(false);
+        m_weatherSystem->SetWeather(WeatherState::Storm, 5.0f);
+    }
+    if (key == '4') 
+        m_weatherSystem->SetAutoWeather(true);
 }

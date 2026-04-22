@@ -20,6 +20,9 @@
 #include <dxgi1_6.h>
 #include <chrono>
 #include "source/SkyDome.h"
+#include "source/OceanFFT.h"
+#include "source/WeatherSystem.h"
+#include "source/RainSystem.h"
 
 using namespace DirectX;
 
@@ -43,11 +46,14 @@ public:
     virtual void OnMouseMove(float dx, float dy) override;
     
     void OnKeyDown(UINT8 key) override;
-
 private:
     static const UINT FrameCount = 2;
     std::unique_ptr<Renderer> m_renderer;
     std::unique_ptr<SkyDome>  m_skyDome;
+    std::unique_ptr<OceanFFT> m_oceanFFT;
+    std::unique_ptr<WeatherSystem> m_weatherSystem;
+    std::unique_ptr<RainSystem> m_rainSystem;
+
     std::chrono::steady_clock::time_point m_lastTime;
    
 

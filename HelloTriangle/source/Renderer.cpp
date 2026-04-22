@@ -5,13 +5,16 @@
 #include "../DXSampleHelper.h"
 #include "GridMesh.h"
 #include "SkyDome.h"
+#include <chrono>
 
 void Renderer::InitPSO(
     ComPtr<ID3D12Device> device,
     ComPtr<ID3D12RootSignature> rootSignature,
     UINT width, UINT height,
     const UINT8* vsData, UINT vsSize,
-    const UINT8* psData, UINT psSize)
+    const UINT8* psData, UINT psSize,
+    const UINT8* waterBoxVSData, UINT waterBoxVSSize,
+    const UINT8* waterBoxPSData, UINT waterBoxPSSize)
 {
     m_device = device;
     m_rootSignature = rootSignature;
@@ -21,6 +24,8 @@ void Renderer::InitPSO(
     m_vertexShaderData.assign(vsData, vsData + vsSize);
     m_pixelShaderData.assign(psData, psData + psSize);
 
+    m_waterBoxVSData.assign(waterBoxVSData, waterBoxVSData + waterBoxVSSize);
+    m_waterBoxPSData.assign(waterBoxPSData, waterBoxPSData + waterBoxPSSize);
     // CBV
     {
         auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
@@ -34,7 +39,7 @@ void Renderer::InitPSO(
             0, &readRange, reinterpret_cast<void**>(&m_pCbvDataBegin)));
     }
 
-    // Input Layout（两个PSO共用）
+    // Input Layout
     D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
     {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -65,7 +70,47 @@ void Renderer::InitPSO(
         ThrowIfFailed(m_device->CreateGraphicsPipelineState(
             &psoDesc, IID_PPV_ARGS(&m_pipelineState)));
     }
+    // 半透明 PSO
+    {
+      
 
+        // 开启 alpha blending
+        D3D12_BLEND_DESC blendDesc = {};
+        blendDesc.RenderTarget[0].BlendEnable = TRUE;
+        blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
+        blendDesc.RenderTarget[0].DestBlend = D3D12_BLEND_INV_SRC_ALPHA;
+        blendDesc.RenderTarget[0].BlendOp = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].SrcBlendAlpha = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ZERO;
+        blendDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+        // 关闭背面剔除，两面都可见
+        CD3DX12_RASTERIZER_DESC rasterDesc(D3D12_DEFAULT);
+        rasterDesc.CullMode = D3D12_CULL_MODE_NONE;
+
+        // 深度测试开启但不写入（透明物体不写深度）
+        CD3DX12_DEPTH_STENCIL_DESC depthDesc(D3D12_DEFAULT);
+        depthDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
+        psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
+        psoDesc.pRootSignature = m_rootSignature.Get();
+        psoDesc.VS = CD3DX12_SHADER_BYTECODE(m_waterBoxVSData.data(), m_waterBoxVSData.size());
+        psoDesc.PS = CD3DX12_SHADER_BYTECODE(m_waterBoxPSData.data(), m_waterBoxPSData.size());
+        psoDesc.RasterizerState = rasterDesc;
+        psoDesc.BlendState = blendDesc;
+        psoDesc.DepthStencilState = depthDesc;
+        psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
+        psoDesc.SampleMask = UINT_MAX;
+        psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        psoDesc.NumRenderTargets = 1;
+        psoDesc.RTVFormats[0] = DXGI_FORMAT_R8G8B8A8_UNORM;
+        psoDesc.SampleDesc.Count = 1;
+
+        ThrowIfFailed(m_device->CreateGraphicsPipelineState(
+            &psoDesc, IID_PPV_ARGS(&m_waterBoxPSO)));
+    }
     // 线框PSO
     CreateWireframePSO();
 
@@ -77,6 +122,8 @@ void Renderer::InitResources(ComPtr<ID3D12GraphicsCommandList> commandList)
 {
     m_commandList = commandList;
     CreateGridBuffers(commandList);  // 录制Grid上传命令
+	CreateWaterBoxBuffers(commandList); // 录制WaterBox上传命令
+    
 }
 
 void Renderer::Render(RenderContext& ctx)
@@ -115,11 +162,42 @@ void Renderer::Update(float deltaTime)
     if (m_skyDome)
     {
         cb.sunDir = m_skyDome->GetSunDirection();
-        cb.sunIntensity = m_skyDome->GetSunIntensity();
         cb.sunColor = m_skyDome->GetSunColor();
         cb.padSun = 0.0f;
         cb.skyColor = m_skyDome->GetSkyColor();
         cb.padSky = 0.0f;
+
+        // 根据太阳高度在日光和月光之间插值
+        float sunY = m_skyDome->GetSunDirection().y;
+        float moonBlend = saturate(-sunY * 3.0f); // 太阳越低月亮越强
+
+        float sunIntensity = m_skyDome->GetSunIntensity();
+        float moonIntensity = m_skyDome->GetMoonIntensity();
+        cb.sunIntensity = std::lerp(sunIntensity, moonIntensity, moonBlend);
+
+        XMFLOAT3 moonColor = m_skyDome->GetMoonColor();
+        XMFLOAT3 sunColor = cb.sunColor;
+        cb.sunColor = XMFLOAT3(
+            std::lerp(sunColor.x, moonColor.x, moonBlend),
+            std::lerp(sunColor.y, moonColor.y, moonBlend),
+            std::lerp(sunColor.z, moonColor.z, moonBlend));
+
+        // 夜晚光照方向切换到月亮
+        if (sunY < 0.0f)
+            cb.sunDir = m_skyDome->GetMoonDirection();
+
+        // 雾气
+        if (m_showcaseMode)
+        {
+            cb.fogStart = 800.0f;
+            cb.fogEnd = 1200.0f;
+        }
+        else
+        {
+            float weatherIntensity = m_weatherSystem ? m_weatherSystem->GetWeatherIntensity() : 0.0f;
+            cb.fogStart = 280.0f - weatherIntensity * 150.0f;
+            cb.fogEnd = 380.0f - weatherIntensity * 150.0f;
+        }
     }
     else
     {
@@ -130,18 +208,18 @@ void Renderer::Update(float deltaTime)
         cb.padSun = 0.0f;
         cb.skyColor = { 0.4f, 0.6f, 0.9f };
         cb.padSky = 0.0f;
+        
     }
     // 4个叠加波的参数
     //               方向              振幅   波长   速度   陡度
-    cb.waves[0] = { {1.0f,  0.0f},  1.5f,  60.0f, 1.0f, 0.06f };  // 主浪，大波长
-    cb.waves[1] = { {0.7f,  0.7f},  0.8f,  35.0f, 1.3f, 0.05f };  // 斜向中浪
-    cb.waves[2] = { {0.2f, -0.9f},  0.4f,  20.0f, 1.6f, 0.04f };  // 小波纹
-    cb.waves[3] = { {-0.5f, 0.8f},  0.2f,  12.0f, 1.1f, 0.03f };  // 反向细纹
-
+    cb.waves[0] = { {1.0f,  0.0f},  0.3f,  60.0f, 1.0f, 0.06f }; 
+    cb.waves[1] = { {0.7f,  0.7f},  0.15f, 35.0f, 1.3f, 0.05f };  
+    cb.waves[2] = { {0.2f, -0.9f},  0.08f, 20.0f, 1.6f, 0.04f }; 
+    cb.waves[3] = { {-0.5f, 0.8f},  0.05f, 12.0f, 1.1f, 0.03f };  
 
     memcpy(m_pCbvDataBegin, &cb, sizeof(cb));
 
-    float speed = 0.05f;
+    float speed = 0.55f;
     float forward = 0.0f,right = 0.0f;
 
     if (GetAsyncKeyState('W') & 0x8000) forward += speed;
@@ -150,12 +228,17 @@ void Renderer::Update(float deltaTime)
     if (GetAsyncKeyState('A') & 0x8000) right -= speed;
 
     m_camera.Move(forward, right);
+	// 展示模式下自动环绕
+    if (m_showcaseMode)
+        m_camera.UpdateShowcase(deltaTime);
 }
 
 void Renderer::OnMouseMove(float dx, float dy)
 {
     m_camera.ProcessMouse(dx, dy);
 }
+
+
 
 void Renderer::ToggleWireframe()
 {
@@ -331,4 +414,85 @@ void Renderer::CreateWireframePSO()
 
     ThrowIfFailed(m_device->CreateGraphicsPipelineState(
         &psoDesc, IID_PPV_ARGS(&m_wireframePSO)));
+}
+
+void Renderer::CreateWaterBoxBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
+{
+    GridMeshData box = GenerateWaterBox(GRID_WORLD_SIZE, GRID_WORLD_SIZE * 0.5f);
+    m_boxIndexCount = static_cast<UINT>(box.indices.size());
+
+    
+
+    UINT vbSize = static_cast<UINT>(box.vertices.size() * sizeof(GridVertex));
+    UINT ibSize = static_cast<UINT>(box.indices.size() * sizeof(uint32_t));
+
+    auto defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+
+    // VB
+    auto vbDesc = CD3DX12_RESOURCE_DESC::Buffer(vbSize);
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &defaultHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
+        D3D12_RESOURCE_STATE_COMMON, nullptr,
+        IID_PPV_ARGS(&m_boxVB)));
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &uploadHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
+        D3D12_RESOURCE_STATE_COMMON, nullptr,
+        IID_PPV_ARGS(&m_boxVBUpload)));
+
+    void* pData = nullptr;
+    CD3DX12_RANGE readRange(0, 0);
+    ThrowIfFailed(m_boxVBUpload->Map(0, &readRange, &pData));
+    memcpy(pData, box.vertices.data(), vbSize);
+    m_boxVBUpload->Unmap(0, nullptr);
+    cmdList->CopyBufferRegion(m_boxVB.Get(), 0, m_boxVBUpload.Get(), 0, vbSize);
+    auto vbBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_boxVB.Get(),
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    cmdList->ResourceBarrier(1, &vbBarrier);
+
+    m_boxVBView.BufferLocation = m_boxVB->GetGPUVirtualAddress();
+    m_boxVBView.StrideInBytes = sizeof(GridVertex);
+    m_boxVBView.SizeInBytes = vbSize;
+
+    // IB
+    auto ibDesc = CD3DX12_RESOURCE_DESC::Buffer(ibSize);
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &defaultHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+        IID_PPV_ARGS(&m_boxIB)));
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &uploadHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+        IID_PPV_ARGS(&m_boxIBUpload)));
+
+    ThrowIfFailed(m_boxIBUpload->Map(0, &readRange, &pData));
+    memcpy(pData, box.indices.data(), ibSize);
+    m_boxIBUpload->Unmap(0, nullptr);
+    cmdList->CopyBufferRegion(m_boxIB.Get(), 0, m_boxIBUpload.Get(), 0, ibSize);
+    auto ibBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_boxIB.Get(),
+        D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    cmdList->ResourceBarrier(1, &ibBarrier);
+
+    m_boxIBView.BufferLocation = m_boxIB->GetGPUVirtualAddress();
+    m_boxIBView.Format = DXGI_FORMAT_R32_UINT;
+    m_boxIBView.SizeInBytes = ibSize;
+}
+
+void Renderer::RenderWaterBox(RenderContext& ctx)
+{
+    ctx.cmd->SetPipelineState(m_waterBoxPSO.Get());
+    ctx.cmd->SetGraphicsRootSignature(m_rootSignature.Get());
+    ctx.cmd->SetGraphicsRootConstantBufferView(0,
+        m_constantBuffer->GetGPUVirtualAddress());
+    ctx.cmd->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
+    ctx.cmd->RSSetViewports(1, &ctx.viewport);
+    ctx.cmd->RSSetScissorRects(1, &ctx.scissor);
+    ctx.cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    ctx.cmd->IASetVertexBuffers(0, 1, &m_boxVBView);
+    ctx.cmd->IASetIndexBuffer(&m_boxIBView);
+    ctx.cmd->DrawIndexedInstanced(m_boxIndexCount, 1, 0, 0, 0);
 }

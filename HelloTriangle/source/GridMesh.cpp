@@ -75,3 +75,66 @@ GridMeshData GenerateGrid(UINT rows, UINT cols, float size)
 
     return data;
 }
+
+GridMeshData GenerateWaterBox(float size, float depth)
+{
+    GridMeshData data;
+    float h = size * 0.5f;  // 半边长
+    float d = -depth;       // 底部Y坐标
+
+    // 辅助lambda：添加一个矩形面（两个三角形）
+    auto addQuad = [&](XMFLOAT3 v0, XMFLOAT3 v1, XMFLOAT3 v2, XMFLOAT3 v3)
+        {
+            uint32_t base = static_cast<uint32_t>(data.vertices.size());
+            data.vertices.push_back({ v0, XMFLOAT2(0.0f, 0.0f) });
+            data.vertices.push_back({ v1, XMFLOAT2(1.0f, 0.0f) });
+            data.vertices.push_back({ v2, XMFLOAT2(1.0f, 1.0f) });
+            data.vertices.push_back({ v3, XMFLOAT2(0.0f, 1.0f) });
+
+            // 三角形1
+            data.indices.push_back(base + 0);
+            data.indices.push_back(base + 1);
+            data.indices.push_back(base + 2);
+            // 三角形2
+            data.indices.push_back(base + 0);
+            data.indices.push_back(base + 2);
+            data.indices.push_back(base + 3);
+        };
+
+    // 前面 (z = +h)
+    addQuad(
+        XMFLOAT3(-h, 0.0f, +h),
+        XMFLOAT3(+h, 0.0f, +h),
+        XMFLOAT3(+h, d, +h),
+        XMFLOAT3(-h, d, +h));
+
+    // 后面 (z = -h)
+    addQuad(
+        XMFLOAT3(+h, 0.0f, -h),
+        XMFLOAT3(-h, 0.0f, -h),
+        XMFLOAT3(-h, d, -h),
+        XMFLOAT3(+h, d, -h));
+
+    // 左面 (x = -h)
+    addQuad(
+        XMFLOAT3(-h, 0.0f, -h),
+        XMFLOAT3(-h, 0.0f, +h),
+        XMFLOAT3(-h, d, +h),
+        XMFLOAT3(-h, d, -h));
+
+    // 右面 (x = +h)
+    addQuad(
+        XMFLOAT3(+h, 0.0f, +h),
+        XMFLOAT3(+h, 0.0f, -h),
+        XMFLOAT3(+h, d, -h),
+        XMFLOAT3(+h, d, +h));
+
+    // 底面 (y = d)
+    addQuad(
+        XMFLOAT3(-h, d, -h),
+        XMFLOAT3(+h, d, -h),
+        XMFLOAT3(+h, d, +h),
+        XMFLOAT3(-h, d, +h));
+
+    return data;
+}

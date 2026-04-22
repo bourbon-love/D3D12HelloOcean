@@ -9,9 +9,11 @@
     float cloudDensity;
     float cloudScale;
     float cloudSharpness;
-    float pad;
+    float weatherIntensity;
     float3 sunColor;
     float padSunColor;
+    float3 moonPosition;
+    float padMoon;
 };
 
 struct VSInput
@@ -201,9 +203,9 @@ float detailedClouds(float3 p, float scale, float time)
     float cloud = base * 0.7 + detail * 0.3;
     
     // 云朵形状参数 - 使用平滑变化的阈值
-    float threshold = 0.4 - sin(baseTime * 0.1) * 0.05; // 平滑变化的阈值
+    float threshold = 0.35 - sin(baseTime * 0.1) * 0.05; // 平滑变化的阈值
     cloud = max(0.0, cloud - threshold);
-    cloud *= 1.6;
+    cloud *= 2.0;
     cloud = min(cloud, 1.0); // 限制最大值
     
     // 平滑的边缘变化
@@ -246,17 +248,26 @@ float4 skyPS(VSOutput input) : SV_Target
     float sunIntensity = pow(sunDot, 256.0f) * 2.0f;
     
     // 向最终颜色添加太阳光晕
-    skyColor.rgb += sunColor * sunIntensity;
+    skyColor.rgb += sunColor * sunIntensity * 2.0f;
     
-    // ===== 修改云分布逻辑，使用平滑变化避免突变 =====
+    //月亮光晕效果
+    // 月亮光盘
+    float3 moonDir = moonPosition.xyz;
+    float moonDot = max(0.0f, dot(normalizedPos, moonDir));
+    float moonDisk = pow(moonDot, 2048.0f) * 3.0f;
+    float moonHalo = pow(moonDot, 64.0f) * 0.2f;
+    skyColor.rgb += float3(0.8f, 0.9f, 1.0f) * moonDisk;
+    skyColor.rgb += float3(0.4f, 0.5f, 0.8f) * moonHalo;
     
-    // 修改高度计算 - 专注于下半球区域
+    // 夜晚星空背景（让天空不要太亮）
+    float nightSky = saturate(-sunPosition.y * 3.0f);
+    skyColor.rgb = lerp(skyColor.rgb, float3(0.02f, 0.02f, 0.08f), nightSky * 0.8f);
+    //高度计算 - 专注于下半球区域
     float baseHeight = normalizedPos.y;
     
-    // 新的高度掩码 - 在下半球分布云，扩大范围
-    float heightMask = 1.0 - smoothstep(-0.9, 0.0, baseHeight);
-    
-    // 使用原始时间值，但应用正弦函数创造平滑循环，避免突变
+    // 高度掩码 - 在下半球分布云，扩大范围
+    float heightMask = smoothstep(-0.1, 0.3, baseHeight) 
+    * (1.0 - smoothstep(0.5, 0.8, baseHeight)); // 使用原始时间值，但应用正弦函数创造平滑循环，避免突变
     float baseTime = time;
     
     // 创建平滑变化的噪声参数 - 通过正弦函数而不是直接使用时间
@@ -294,8 +305,9 @@ float4 skyPS(VSOutput input) : SV_Target
     // 平滑变化的云密度系数
     float densityFactor = 2.8 + sin(baseTime * 0.01) * 0.3;
     
+     float stormCloudDensity = cloudDensity * (1.0f + weatherIntensity * 2.0f);
     // 结合高度掩码和噪声，创建平滑变化的云分布
-    float cloudMask = heightMask * (distributionNoise * 0.7 + horizontalNoise * 0.3) * cloudDensity * densityFactor;
+    float cloudMask = heightMask * (distributionNoise * 0.7 + horizontalNoise * 0.3) * stormCloudDensity * densityFactor;
     
     // 创建多个云层 - 降低阈值，增加云的区域
     if (cloudMask > 0.08) // 降低阈值，增加云的区域
@@ -313,11 +325,7 @@ float4 skyPS(VSOutput input) : SV_Target
         // 混合云层 - 增加各层的影响
         float cloudFactor = cloudLayer1 * 0.5 + cloudLayer2 * 0.35 + cloudLayer3 * 0.25;
         cloudFactor *= cloudMask;
-        
-        // 使用更大的最大不透明度
         cloudFactor = min(cloudFactor, 0.85);
-        
-        // 应用较弱的幂函数，减少对比度，使云更连续
         cloudFactor = pow(cloudFactor, 1.1);
         
         // 云颜色 - 使用更自然的云颜色，底部稍微偏暗
@@ -325,9 +333,17 @@ float4 skyPS(VSOutput input) : SV_Target
         
         // 根据高度调整云颜色 - 下方云层略微偏灰
         float heightFactor = smoothstep(-1.0, 0.0, baseHeight);
-        cloudColor.rgb = lerp(float3(0.9, 0.9, 0.95), float3(1.0, 1.0, 1.0), heightFactor);
         
-        // 根据太阳方向调整云颜色
+        // 暴风时云底变深灰
+        // 替换原来的 cloudColor 计算
+        float3 calmCloudBase = float3(0.75, 0.75, 0.82); // 云底更暗
+        float3 stormCloudBase = float3(0.25, 0.25, 0.30);
+        cloudColor.rgb = lerp(
+        lerp(calmCloudBase, float3(1.0, 1.0, 1.0), heightFactor),
+        stormCloudBase,
+        weatherIntensity);
+
+        // 加强太阳照射的明暗对比
         float sunInfluence = pow(max(0.0, dot(normalizedPos, sunDir) * 0.5 + 0.5), 2.0);
         
         // 混合天空颜色和云颜色

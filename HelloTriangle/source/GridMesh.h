@@ -23,3 +23,5 @@ struct GridMeshData
 // rows/cols : 分段数，实际顶点数是(rows+1)*(cols+1)
 // size      : 网格总尺寸，以世界坐标为单位，网格居中于原点
 GridMeshData GenerateGrid(UINT rows, UINT cols, float size);
+// 生成水箱侧面和底面
+GridMeshData GenerateWaterBox(float size, float depth);

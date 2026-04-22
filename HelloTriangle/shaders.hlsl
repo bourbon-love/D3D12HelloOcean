@@ -1,4 +1,4 @@
-﻿
+﻿//shaders.hlsl
 cbuffer SceneCB : register(b0)
 {
     float4x4 view;
@@ -12,7 +12,9 @@ cbuffer SceneCB : register(b0)
     float padSun;
     float3 skyColor; // 天空主色，用于Fresnel反射
     float padSky;
-    
+    float fogStart; // 雾开始距离
+    float fogEnd; // 雾结束距离
+    float2 padFog;
     // Wave parameters for 4 waves, 
     //each wave has direction, amplitude, wavelength, speed, step and padding
     float2 waveDir0;   float waveAmp0; float waveLen0;
@@ -29,6 +31,30 @@ cbuffer SceneCB : register(b0)
     
     
 };
+
+struct RippleData
+{
+    float2 position;
+    float radius;
+    float strength;
+};
+
+cbuffer RippleCB : register(b1)
+{
+    RippleData ripples[200];
+    uint rippleCount;
+    float3 ripplePad;
+};
+
+
+Texture2D<float4> g_heightMap : register(t0);
+Texture2D<float4> g_dztMap : register(t1);
+SamplerState g_sampler : register(s0);
+
+
+static const float FFT_HEIGHT_SCALE = 1.0f / 1000.0f;
+static const float FFT_CHOP_SCALE = 1.0f / 1000.0f;
+static const float FFT_TILE_SIZE = 400.0f;
 
 struct VSInput
 {
@@ -89,106 +115,145 @@ VSOutput VSMain(VSInput vin)
     float3 tangentX = float3(1.0f, 0.0f, 0.0f);
     float3 tangentZ = float3(0.0f, 0.0f, 1.0f);
     
-    // Apply 4 Gerstner waves to the vertex
+    // 计算到边缘的距离，归一化到 0~1
+    float halfSize = FFT_TILE_SIZE * 0.5f;
+    float distToEdgeX = 1.0f - abs(vin.position.x) / halfSize;
+    float distToEdgeZ = 1.0f - abs(vin.position.z) / halfSize;
+    float distToEdge = min(distToEdgeX, distToEdgeZ);
+
+    // 边缘衰减系数：边缘处为0，内部为1，过渡带宽度可调
+    float heightFade = smoothstep(0.0f, 0.2f, distToEdge); // 0.05 = 5%的过渡带
+    float chopFade = smoothstep(0.0f, 0.4f, distToEdge);
+    // Gerstner 位移乘以衰减
     GerstnerWave(xz, waveDir0, waveAmp0, waveLen0, waveSpd0, waveStp0, disp, tangentX, tangentZ);
     GerstnerWave(xz, waveDir1, waveAmp1, waveLen1, waveSpd1, waveStp1, disp, tangentX, tangentZ);
     GerstnerWave(xz, waveDir2, waveAmp2, waveLen2, waveSpd2, waveStp2, disp, tangentX, tangentZ);
     GerstnerWave(xz, waveDir3, waveAmp3, waveLen3, waveSpd3, waveStp3, disp, tangentX, tangentZ);
+    disp *= heightFade;
 
-    //world position = original position + displacement
     float3 worldPos = vin.position + disp;
-    
-    //normal = cross product of tangent vectors
+    float2 fftUV = vin.position.xz / FFT_TILE_SIZE;
+
+    float4 fftSample = g_heightMap.SampleLevel(g_sampler, fftUV, 0);
+    float fftHeight = fftSample.x * FFT_HEIGHT_SCALE * heightFade;
+    float fftDx = fftSample.z * FFT_CHOP_SCALE * chopFade; // 用更强衰减
+    float fftDz = g_dztMap.SampleLevel(g_sampler, fftUV, 0).x * FFT_CHOP_SCALE * chopFade;
+
+    worldPos.y += fftHeight * -1.0f;
+    worldPos.x += fftDx;
+    worldPos.z += fftDz;
+
     float3 normal = normalize(cross(tangentZ, tangentX));
-    
-    //change to homogeneous clip space
+    //float3 normal = normalize(cross(tangentX, tangentZ));
+
     float4 posV = mul(float4(worldPos, 1.0f), view);
     vout.posH = mul(posV, proj);
     vout.posW = worldPos;
     vout.normal = normal;
-    vout.uv = vin.uv;
-    
-    
+    vout.uv = fftUV;
     return vout;
-}
 
-// -----------------------------------------------
-// Pixel Shader — 三个效果全在这里
-// -----------------------------------------------
+}
 float4 PSMain(VSOutput pin) : SV_TARGET
 {
-    float3 N = normalize(pin.normal);
+    // 逐像素从 heightMap 重新算法线（和 VS 用同一个 scale）
+    const float texelSize = 1.0f / 256.0f;
+    const float worldPerTexel = FFT_TILE_SIZE / 256.0f;
 
-    // 视线方向（从片元指向摄像机，归一化）
+    // 采样周围高度
+    float hL = -g_heightMap.SampleLevel(g_sampler, pin.uv + float2(-texelSize, 0), 0).x * FFT_HEIGHT_SCALE;
+    float hR = -g_heightMap.SampleLevel(g_sampler, pin.uv + float2(texelSize, 0), 0).x * FFT_HEIGHT_SCALE;
+    float hD = -g_heightMap.SampleLevel(g_sampler, pin.uv + float2(0, -texelSize), 0).x * FFT_HEIGHT_SCALE;
+    float hU = -g_heightMap.SampleLevel(g_sampler, pin.uv + float2(0, texelSize), 0).x * FFT_HEIGHT_SCALE;
+
+    // 采样周围 Dx
+    float dxL = g_heightMap.SampleLevel(g_sampler, pin.uv + float2(-texelSize, 0), 0).z * FFT_CHOP_SCALE;
+    float dxR = g_heightMap.SampleLevel(g_sampler, pin.uv + float2(texelSize, 0), 0).z * FFT_CHOP_SCALE;
+    float dxD = g_heightMap.SampleLevel(g_sampler, pin.uv + float2(0, -texelSize), 0).z * FFT_CHOP_SCALE;
+    float dxU = g_heightMap.SampleLevel(g_sampler, pin.uv + float2(0, texelSize), 0).z * FFT_CHOP_SCALE;
+
+// 采样周围 Dz
+    float dzL = g_dztMap.SampleLevel(g_sampler, pin.uv + float2(-texelSize, 0), 0).x * FFT_CHOP_SCALE;
+    float dzR = g_dztMap.SampleLevel(g_sampler, pin.uv + float2(texelSize, 0), 0).x * FFT_CHOP_SCALE;
+    float dzD = g_dztMap.SampleLevel(g_sampler, pin.uv + float2(0, -texelSize), 0).x * FFT_CHOP_SCALE;
+    float dzU = g_dztMap.SampleLevel(g_sampler, pin.uv + float2(0, texelSize), 0).x * FFT_CHOP_SCALE;
+
+// 偏导数
+    float dHdx = (hR - hL) / (2.0f * worldPerTexel);
+    float dHdz = (hU - hD) / (2.0f * worldPerTexel);
+    float dDxdx = (dxR - dxL) / (2.0f * worldPerTexel);
+    float dDzdz = (dzU - dzD) / (2.0f * worldPerTexel);
+    float dDxdz = (dxU - dxD) / (2.0f * worldPerTexel);
+    float dDzdx = (dzR - dzL) / (2.0f * worldPerTexel);
+
+// 雅可比法线：tangentX = (1+dDxdx, dHdx, dDzdx), tangentZ = (dDxdz, dHdz, 1+dDzdz)
+    float3 tangentX = float3(1.0f + dDxdx, dHdx, dDzdx);
+    float3 tangentZ = float3(dDxdz, dHdz, 1.0f + dDzdz);
+    float3 N = normalize(cross(tangentZ, tangentX));
+    
+    // 涟漪法线扰动
+    for (uint i = 0; i < rippleCount; ++i)
+    {
+        float2 toPixel = pin.posW.xz - ripples[i].position;
+        float dist = length(toPixel);
+        float r = ripples[i].radius;
+
+    // 只在涟漪圆环附近扰动
+        float ringWidth = 1.5f;
+        float inRing = saturate(1.0f - abs(dist - r) / ringWidth);
+
+        if (inRing > 0.0f)
+        {
+            float2 dir = dist > 0.001f ? toPixel / dist : float2(1.0f, 0.0f);
+            float wave = sin((dist - r) * 3.14159f / ringWidth);
+            float strength = inRing * ripples[i].strength * wave * 0.3f;
+
+            N.x += dir.x * strength;
+            N.z += dir.y * strength;
+            N = normalize(N);
+        }
+    }
+    // 视线、光照方向
     float3 V = normalize(cameraPos - pin.posW);
-
-    // 太阳方向（从天空Shader同步过来）
     float3 L = sunDir;
-
-    // 半程向量
     float3 H = normalize(V + L);
 
-    // -----------------------------------------------
-    // 1. 基础水色（深浅混合，和之前一样）
-    // -----------------------------------------------
-    float3 deepColor = float3(0.01f, 0.08f, 0.2f);
-    float3 shallowColor = float3(0.05f, 0.3f, 0.5f);
-    float heightFactor = saturate(pin.posW.y / 1.2f + 0.5f);
+    // 基础水色
+    float3 deepColor = float3(0.02f, 0.12f, 0.3f);
+    float3 shallowColor = float3(0.08f, 0.3f, 0.6f);
+    float heightFactor = saturate(pin.posW.y * 0.2f + 0.5f);
     float3 waterColor = lerp(deepColor, shallowColor, heightFactor);
 
-    // -----------------------------------------------
-    // 2. Diffuse漫反射
-    // -----------------------------------------------
+    // Diffuse
     float NdotL = saturate(dot(N, L));
-    
-    // 用sunColor和sunIntensity驱动漫反射，日落时偏橙变暗
-    float3 diffuse = waterColor * (NdotL * 0.7f * sunIntensity + 0.15f);
-    diffuse *= sunColor; //  太阳颜色染色
-    // -----------------------------------------------
-    // 3. Blinn-Phong高光
-    // -----------------------------------------------
+    float3 diffuse = waterColor * (NdotL * 0.5f * sunIntensity + 0.5f);
+    diffuse *= sunColor;
+
+    // Blinn-Phong specular
     float NdotH = saturate(dot(N, H));
-    float specular = pow(NdotH, 128.0f); // 指数越大，高光点越小越亮
-    
-    // 高光颜色直接用太阳颜色，日落时高光变橙红
+    float specular = pow(NdotH, 128.0f);
     float3 specularColor = sunColor * specular * sunIntensity * 2.0f;
 
-    // -----------------------------------------------
-    // 4. Fresnel反射
-    // -----------------------------------------------
-    // Schlick近似，F0=0.02是水的基础反射率
+    // Fresnel
     float F0 = 0.02f;
     float NdotV = saturate(dot(N, V));
     float fresnel = F0 + (1.0f - F0) * pow(1.0f - NdotV, 5.0f);
-    
-    //反射颜色用天空颜色乘以Fresnel系数，日落时天空变橙，反射也变橙
     float3 reflectColor = skyColor * fresnel;
 
-    // -----------------------------------------------
-    // 5. 波峰泡沫
-    // -----------------------------------------------
-    // 波峰Y值超过0.5时开始出现泡沫，超过1.0时完全是白色
-    float foam = smoothstep(1.2f, 2.0f, pin.posW.y);
-    float3 foamColor = float3(1.0f, 1.0f, 1.0f);
+    float3 color = diffuse + specularColor + reflectColor;
 
-    // -----------------------------------------------
-    // 合并所有项
-    // -----------------------------------------------
-    float3 color = diffuse // 漫反射水色
-                 + specularColor // 高光
-                 + reflectColor; // Fresnel天空反射
-    // 指数雾
-    float dist = length(cameraPos - pin.posW); // 片元到摄像机的距离
-    float fogStart = 80.0f; // 从80单位开始出雾
-    float fogEnd = 180.0f; // 180单位完全是雾色
+    // Fog
+    float dist = length(cameraPos - pin.posW);
     float fogFactor = saturate((dist - fogStart) / (fogEnd - fogStart));
+    color = lerp(color, skyColor, fogFactor);
 
-// 雾色和天空色一致，远处海面自然融入天空
-    float3 fogColor = skyColor;
-    color = lerp(color, fogColor, fogFactor);
-    
-    // 最后叠加泡沫（泡沫覆盖其他所有效果）
-    color = lerp(color, foamColor, foam * 0.3f);
 
+    // 波峰Y值超过0.5时开始出现泡沫，超过1.0时完全是白色
+    float J = (1.0f + dDxdx) * (1.0f + dDzdz) - dDxdz * dDzdx;
+    float foam = 1.0f - saturate(J);
+    foam = pow(foam, 2.0f);
+
+    float3 foamColor = float3(1.0f, 1.0f, 1.0f);
+    color = lerp(color, foamColor, foam * 0.8f);
     return float4(color, 1.0f);
 }

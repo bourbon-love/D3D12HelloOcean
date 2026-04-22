@@ -3,8 +3,6 @@
 #include <cmath>
 #include <algorithm>
 
-// 辅助函数
-inline float saturate(float v) { return std::clamp(v, 0.0f, 1.0f); }
 // 球体顶点，只有Position，和原来的SKY_VERTEX一样
 struct SkyVertex { XMFLOAT3 position; };
 
@@ -170,13 +168,15 @@ void SkyDome::Update(float deltaTime)
 {
     m_time += deltaTime * 0.5f;
 
-    // 太阳绕X轴旋转，Y从-1到+1完整循环
-    // 乘以0.05让一天约120秒
-    float angle = m_time * 0.05f;
+    float angle = m_time * 0.3f; // 公转速度
 
-    m_sunDir.x = cosf(angle);
-    m_sunDir.y = sinf(angle);   // ← Y从-1到+1，完整经过地平线
-    m_sunDir.z = 0.3f;          // 固定Z偏移，让太阳不在正头顶
+    // 太阳：水平圆形轨道，略微倾斜
+    float orbitRadius = 0.95f;   // 轨道半径（归一化方向向量）
+    float orbitHeight = 0.15f;   // 轨道高度，始终在地平线略上方
+
+    m_sunDir.x = cosf(angle) * orbitRadius;
+    m_sunDir.y = sinf(angle * 0.5f) * 0.4f; // Y方向小幅变化，模拟轨道倾斜
+    m_sunDir.z = sinf(angle) * orbitRadius;
 
     // 归一化
     float len = sqrtf(m_sunDir.x * m_sunDir.x +
@@ -186,7 +186,19 @@ void SkyDome::Update(float deltaTime)
     m_sunDir.y /= len;
     m_sunDir.z /= len;
 
-    // 云参数更新不变
+    // 月亮：太阳对面，角度差180度
+    m_moonDir.x = -m_sunDir.x;
+    m_moonDir.y = -m_sunDir.y * 0.5f + 0.2f; // 月亮轨道略有不同
+    m_moonDir.z = -m_sunDir.z;
+
+    float moonLen = sqrtf(m_moonDir.x * m_moonDir.x +
+        m_moonDir.y * m_moonDir.y +
+        m_moonDir.z * m_moonDir.z);
+    m_moonDir.x /= moonLen;
+    m_moonDir.y /= moonLen;
+    m_moonDir.z /= moonLen;
+
+    // 云参数
     float cycle1 = sinf(m_time * 0.2f) * 0.5f + 0.5f;
     float cycle2 = cosf(m_time * 0.15f) * 0.5f + 0.5f;
     m_cloudDensity = 0.5f + cycle1 * 0.1f;
@@ -218,9 +230,11 @@ void SkyDome::Render(RenderContext& ctx)
     cb.cloudDensity = m_cloudDensity;
     cb.cloudScale = m_cloudScale;
     cb.cloudSharpness = m_cloudSharpness;
-    cb.pad = 0.0f;
+    cb.weatherIntensity = m_weatherIntensity;
     cb.sunColor = GetSunColor();
     cb.padSunColor = 0.0f;
+	cb.moonPosition = m_moonDir;
+	cb.padMoon = 0.0f;
     memcpy(m_cbMapped, &cb, sizeof(cb));
 
     // 切换到天空PSO
@@ -244,29 +258,30 @@ float SkyDome::GetSunIntensity() const
 {
     // m_sunDir.y是太阳的垂直分量
     // 正午y≈1（最亮），日落y≈0（地平线），夜晚y<0（熄灭）
-    return saturate(m_sunDir.y + 0.1f);  // 加0.1让日落时还有一点余晖
+    // 加0.1让日落时还有一点余晖
+    float baseIntensity = saturate(m_sunDir.y + 0.1f); 
+    // 暴风时太阳强度降低到20%
+    return baseIntensity * (1.0f - m_weatherIntensity * 0.8f);
 }
 
 // 根据太阳高度计算颜色：正午白色，日出日落橙红
 XMFLOAT3 SkyDome::GetSunColor() const
 {
-    float h = m_sunDir.y;  // -1到1
+    float h = saturate(m_sunDir.y + 0.2f);
+    XMFLOAT3 nightColor = { 0.05f, 0.05f, 0.15f };
+    XMFLOAT3 dayColor = { 0.4f,  0.6f,  0.9f };
+    XMFLOAT3 stormColor = { 0.15f, 0.15f, 0.2f }; // 暴风灰色
 
-    // 正午：接近白色
-    // 日落（h≈0）：橙红色
-    // 用太阳高度插值
-    float t = saturate(h);  // 0到1
+    XMFLOAT3 baseColor = XMFLOAT3(
+        nightColor.x + (dayColor.x - nightColor.x) * h,
+        nightColor.y + (dayColor.y - nightColor.y) * h,
+        nightColor.z + (dayColor.z - nightColor.z) * h);
 
-    // 日落色
-    XMFLOAT3 sunsetColor = { 1.0f, 0.4f, 0.1f };
-    // 正午色
-    XMFLOAT3 noonColor = { 1.0f, 0.95f, 0.8f };
-
+    // 根据天气强度插值到暴风色
     return XMFLOAT3(
-        sunsetColor.x + (noonColor.x - sunsetColor.x) * t,
-        sunsetColor.y + (noonColor.y - sunsetColor.y) * t,
-        sunsetColor.z + (noonColor.z - sunsetColor.z) * t
-    );
+        baseColor.x + (stormColor.x - baseColor.x) * m_weatherIntensity,
+        baseColor.y + (stormColor.y - baseColor.y) * m_weatherIntensity,
+        baseColor.z + (stormColor.z - baseColor.z) * m_weatherIntensity);
 }
 
 // 天空主色：根据太阳高度从夜蓝到日蓝

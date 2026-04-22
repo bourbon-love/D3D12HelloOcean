@@ -5,10 +5,11 @@
 #include "Camera.h"
 #include <vector>
 #include "SkyDome.h"
+#include "WeatherSystem.h"
 using Microsoft::WRL::ComPtr;
 
 
-static const UINT  GRID_SIZE = 128;   // 分段数
+static const UINT  GRID_SIZE = 512;   // 分段数
 static const float GRID_WORLD_SIZE = 400.0f; // 世界空间尺寸
 
 class Renderer
@@ -22,7 +23,9 @@ public:
         UINT width,
         UINT height,
         const UINT8* vsData,UINT vsSize,
-        const UINT8* psData,UINT psSize
+        const UINT8* psData,UINT psSize,
+		const UINT8* waterBoxVSData, UINT waterBoxVSSize,
+		const UINT8* waterBoxPSData, UINT waterBoxPSSize
         );
     // Records grid mesh upload commands into the command list
     // Call before closing and executing the init command list    
@@ -32,6 +35,7 @@ public:
     void Update(float deltaTime);
     void OnMouseMove(float dx, float dy);
 
+	void RenderWaterBox(RenderContext& ctx);
     void ToggleWireframe();
 
     ID3D12DescriptorHeap* GetDSVHeap() const { return m_dsvHeap.Get(); }
@@ -40,10 +44,14 @@ public:
     D3D12_VERTEX_BUFFER_VIEW    GetGridVBView() const { return m_gridVBView; }
     D3D12_INDEX_BUFFER_VIEW     GetGridIBView() const { return m_gridIBView; }
     UINT                     GetGridIndexCount() const { return m_gridIndexCount; }
-
+    float GetTime() const { return m_time; }
+    XMFLOAT3 GetCameraPos() const { return m_camera.position; }
+	Camera& GetCamera() { return m_camera; }
+    void ToggleShowcase() { m_showcaseMode = !m_showcaseMode; }
+    bool IsShowcaseMode() const { return m_showcaseMode; }
 	// 供SkyDome读取太阳和天空参数
     void SetSkyDome(SkyDome* skyDome) { m_skyDome = skyDome; }
-
+    void SetWeatherSystem(WeatherSystem* ws) { m_weatherSystem = ws; }
     XMMATRIX GetViewMatrix() const
     {
         return m_camera.GetViewMatrix();
@@ -78,7 +86,9 @@ public:
         float             padSun;
         XMFLOAT3 skyColor;
         float             padSky;
-
+        float fogStart;   // 雾开始距离
+        float fogEnd;     // 雾结束距离
+        XMFLOAT2 padFog;
         WaveParam waves[4];
 
     };
@@ -88,13 +98,16 @@ private:
 
     void CreateDepthBuffer(UINT width, UINT height);
     void CreateGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList);
+    void CreateWaterBoxBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList);
     void CreateWireframePSO();
 
     Camera m_camera;
 	SkyDome* m_skyDome = nullptr;
+    WeatherSystem* m_weatherSystem = nullptr;
     SceneCB* m_mappedCB = nullptr;
     UINT8* m_pCbvDataBegin;
     bool  m_wireframe = false;
+    bool  m_showcaseMode = false;
 
 	float m_time = 0.0f;
 
@@ -121,4 +134,18 @@ private:
     std::vector<UINT8> m_vertexShaderData;
     std::vector<UINT8> m_pixelShaderData;
 
+    std::vector<UINT8> m_waterBoxVSData;
+    std::vector<UINT8> m_waterBoxPSData;
+
+    // 水箱
+    ComPtr<ID3D12Resource> m_boxVB;
+    ComPtr<ID3D12Resource> m_boxVBUpload;
+    ComPtr<ID3D12Resource> m_boxIB;
+    ComPtr<ID3D12Resource> m_boxIBUpload;
+    D3D12_VERTEX_BUFFER_VIEW m_boxVBView = {};
+    D3D12_INDEX_BUFFER_VIEW  m_boxIBView = {};
+    UINT                     m_boxIndexCount = 0;
+
+    // 半透明 PSO
+    ComPtr<ID3D12PipelineState> m_waterBoxPSO;
 };

@@ -65,3 +65,17 @@ void Camera::Move(float forwardDelta, float rightDelta)
 
     XMStoreFloat3(&position, pos);
 }
+
+void Camera::UpdateShowcase(float deltaTime)
+{
+    if (!m_showcaseMode) return;
+    m_showcaseAngle += deltaTime * 0.3f; // 旋转速度
+    position.x = sinf(m_showcaseAngle) * m_showcaseRadius;
+    position.z = cosf(m_showcaseAngle) * m_showcaseRadius;
+    position.y = m_showcaseHeight;
+
+    // 始终看向原点（水族箱中心）
+    // 通过 pitch 和 yaw 控制方向
+    m_yaw = m_showcaseAngle + XM_PI; // 朝向原点
+    m_pitch = -atanf(m_showcaseHeight / m_showcaseRadius); // 俯角
+}
