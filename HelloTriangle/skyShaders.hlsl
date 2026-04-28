@@ -277,9 +277,7 @@ float4 skyPS(VSOutput input) : SV_Target
     float moonBody = pow(moonDot, 1000.0f); // 控制月亮大小
     float moonOcclude = pow(crescentDot, 1400.0f); // 控制遮挡圆大小
     float moonCrescent = saturate(moonBody - moonOcclude * 2.0f); 
-    // 月牙颜色（确认形状正确后改成白色）
-    //skyColor.rgb += float3(1.0f, 1.0f, 0.95f) * moonCrescent * 8.0f;
-    skyColor.rgb += float3(1.0f, 0.0f, 0.0f) * moonCrescent * 8.0f;
+    skyColor.rgb += float3(1.0f, 1.0f, 0.95f) * moonCrescent * 8.0f;
     
     
     // 光晕

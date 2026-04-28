@@ -167,24 +167,26 @@ void Renderer::Update(float deltaTime)
         cb.skyColor = m_skyDome->GetSkyColor();
         cb.padSky = 0.0f;
 
-        // 根据太阳高度在日光和月光之间插值
+        // 根据太阳高度在日光和月光之间平滑插值，过渡带 sunY ∈ [-0.1, 0.1]
         float sunY = m_skyDome->GetSunDirection().y;
-        if (sunY >= 0.0f)
-        {
-            // 白天用太阳
-            cb.sunDir = m_skyDome->GetSunDirection();
-            cb.sunIntensity = m_skyDome->GetSunIntensity();
-            cb.sunColor = m_skyDome->GetSunColor();
-        }
-        else
-        {
-            // 夜晚用月亮
-            cb.sunDir = m_skyDome->GetMoonDirection();
-            cb.sunIntensity = m_skyDome->GetMoonIntensity();
-            cb.sunColor = m_skyDome->GetMoonColor();
-        }
+        float dayBlend = std::clamp((sunY + 0.1f) / 0.2f, 0.0f, 1.0f);
 
-      
+        XMFLOAT3 sunDir  = m_skyDome->GetSunDirection();
+        XMFLOAT3 moonDir = m_skyDome->GetMoonDirection();
+        cb.sunDir = XMFLOAT3(
+            std::lerp(moonDir.x, sunDir.x, dayBlend),
+            std::lerp(moonDir.y, sunDir.y, dayBlend),
+            std::lerp(moonDir.z, sunDir.z, dayBlend));
+
+        cb.sunIntensity = std::lerp(m_skyDome->GetMoonIntensity(), m_skyDome->GetSunIntensity(), dayBlend);
+
+        XMFLOAT3 sunCol  = m_skyDome->GetSunColor();
+        XMFLOAT3 moonCol = m_skyDome->GetMoonColor();
+        cb.sunColor = XMFLOAT3(
+            std::lerp(moonCol.x, sunCol.x, dayBlend),
+            std::lerp(moonCol.y, sunCol.y, dayBlend),
+            std::lerp(moonCol.z, sunCol.z, dayBlend));
+
 
         // 雾气
         if (m_showcaseMode)
