@@ -232,6 +232,20 @@ void SkyDome::Update(float deltaTime)
         };
     }
 
+    // 闪电
+    m_lightningCooldown -= deltaTime;
+    if (m_weatherIntensity > 0.7f && m_lightningCooldown <= 0.0f && m_lightningIntensity <= 0.0f)
+    {
+        float r = fabsf(sinf(m_time * 127.3f)); // 伪随机 0..1
+        m_lightningIntensity = 0.4f + r * 0.6f;
+        m_lightningCooldown  = 2.0f + r * 6.0f; // 下次触发间隔 2~8 秒
+    }
+    if (m_lightningIntensity > 0.0f)
+    {
+        m_lightningIntensity -= deltaTime * 5.0f; // 约 0.2s 衰减到 0
+        if (m_lightningIntensity < 0.0f) m_lightningIntensity = 0.0f;
+    }
+
     // 云参数
     float cycle1 = sinf(m_time * 0.2f) * 0.5f + 0.5f;
     float cycle2 = cosf(m_time * 0.15f) * 0.5f + 0.5f;
@@ -262,9 +276,47 @@ void SkyDome::Render(RenderContext& ctx)
     // 更新CBV
     SkyCB cb;
     cb.viewProj = XMMatrixTranspose(viewProj);
-    cb.topColor = XMFLOAT4(0.1f, 0.3f, 0.7f, 1.0f);
-    cb.middleColor = XMFLOAT4(0.4f, 0.6f, 0.9f, 1.0f);
-    cb.bottomColor = XMFLOAT4(0.7f, 0.8f, 1.0f, 1.0f);
+    // Dynamic sky gradient: night → sunset → day
+    {
+        float sunH = m_sunDir.y;
+
+        // dayT: 0=night, 1=full day
+        float dayT = std::clamp((sunH + 0.15f) / 0.35f, 0.0f, 1.0f);
+        dayT = dayT * dayT * (3.0f - 2.0f * dayT); // smoothstep
+
+        // sunsetT: 1 at horizon, 0 when sun is high or deep below
+        float sunsetT = std::clamp(1.0f - fabsf(sunH) / 0.22f, 0.0f, 1.0f);
+        sunsetT = sunsetT * sunsetT;
+
+        // Night / Sunset / Day palettes
+        float topN[3] = { 0.01f, 0.01f, 0.06f };
+        float midN[3] = { 0.02f, 0.02f, 0.09f };
+        float botN[3] = { 0.03f, 0.03f, 0.12f };
+
+        float topS[3] = { 0.10f, 0.16f, 0.48f };   // blue-purple zenith
+        float midS[3] = { 0.95f, 0.40f, 0.08f };   // rich orange
+        float botS[3] = { 1.60f, 0.72f, 0.12f };   // HDR gold horizon (triggers bloom)
+
+        float topD[3] = { 0.08f, 0.25f, 0.72f };
+        float midD[3] = { 0.38f, 0.62f, 1.05f };
+        float botD[3] = { 0.62f, 0.80f, 1.05f };
+
+        float top[3], mid[3], bot[3];
+        for (int i = 0; i < 3; i++)
+        {
+            float baseTop = topN[i] + (topD[i] - topN[i]) * dayT;
+            float baseMid = midN[i] + (midD[i] - midN[i]) * dayT;
+            float baseBot = botN[i] + (botD[i] - botN[i]) * dayT;
+
+            top[i] = baseTop + (topS[i] - baseTop) * sunsetT * 0.65f;
+            mid[i] = baseMid + (midS[i] - baseMid) * sunsetT;
+            bot[i] = baseBot + (botS[i] - baseBot) * sunsetT;
+        }
+
+        cb.topColor    = XMFLOAT4(top[0], top[1], top[2], 1.0f);
+        cb.middleColor = XMFLOAT4(mid[0], mid[1], mid[2], 1.0f);
+        cb.bottomColor = XMFLOAT4(bot[0], bot[1], bot[2], 1.0f);
+    }
     cb.sunPosition = m_sunDir;
     cb.time = m_time;
     cb.cloudDensity = m_cloudDensity;
@@ -277,10 +329,12 @@ void SkyDome::Render(RenderContext& ctx)
 	cb.padMoon = 0.0f;
     cb.moonCrescentDir   = m_crescentDir;
     cb.padCrescent       = 0.0f;
-    cb.moonBodyPow       = m_moonBodyPow;
-    cb.moonOccludePow    = m_moonOccludePow;
-    cb.crescentOffsetAmt = m_crescentOffsetAmt;
-    cb.padMoonParams     = 0.0f;
+    cb.moonBodyPow        = m_moonBodyPow;
+    cb.moonOccludePow     = m_moonOccludePow;
+    cb.crescentOffsetAmt  = m_crescentOffsetAmt;
+    cb.padMoonParams      = 0.0f;
+    cb.lightningIntensity = m_lightningIntensity;
+    cb.padLightning[0] = cb.padLightning[1] = cb.padLightning[2] = 0.0f;
     memcpy(m_cbMapped, &cb, sizeof(cb));
 
     // 切换到天空PSO

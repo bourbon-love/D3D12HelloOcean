@@ -253,6 +253,32 @@ dxc.exe -nologo -Tps_6_0 -E"PSMain" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename)_P
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(Identity)</Message>
       <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Identity)</Message>
     </CustomBuild>
+    <CustomBuild Include="shaders\bloom.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"BloomVS"      -Zi -Qembed_debug -Fo"$(OutDir)bloom_BloomVS.cso"      "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"BrightPassPS" -Zi -Qembed_debug -Fo"$(OutDir)bloom_BrightPassPS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"BlurPS"       -Zi -Qembed_debug -Fo"$(OutDir)bloom_BlurPS.cso"       "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"CompositePS"  -Zi -Qembed_debug -Fo"$(OutDir)bloom_CompositePS.cso"  "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)bloom_BloomVS.cso;$(OutDir)bloom_BrightPassPS.cso;$(OutDir)bloom_BlurPS.cso;$(OutDir)bloom_CompositePS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling bloom shaders</Message>
+    </CustomBuild>
+    <CustomBuild Include="shaders\tonemapping.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"ToneMapVS" -Zi -Qembed_debug -Fo"$(OutDir)tonemapping_ToneMapVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"ToneMapPS" -Zi -Qembed_debug -Fo"$(OutDir)tonemapping_ToneMapPS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)tonemapping_ToneMapVS.cso;$(OutDir)tonemapping_ToneMapPS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling tonemapping shaders</Message>
+    </CustomBuild>
+    <CustomBuild Include="shaders\godrays.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"GodRayVS" -Zi -Qembed_debug -Fo"$(OutDir)godrays_GodRayVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"GodRayPS" -Zi -Qembed_debug -Fo"$(OutDir)godrays_GodRayPS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)godrays_GodRayVS.cso;$(OutDir)godrays_GodRayPS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling god ray shaders</Message>
+    </CustomBuild>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -80,6 +80,31 @@ private:
     ComPtr<ID3D12GraphicsCommandList> m_commandList;
     UINT m_rtvDescriptorSize;
 
+    // HDR render target
+    ComPtr<ID3D12Resource>       m_hdrRT;
+    ComPtr<ID3D12RootSignature>  m_toneMappingRootSig;
+    ComPtr<ID3D12PipelineState>  m_toneMappingPSO;
+    float m_exposure = 1.0f;
+
+    // God rays
+    ComPtr<ID3D12Resource>       m_godRayRT;
+    ComPtr<ID3D12RootSignature>  m_godRayRootSig;
+    ComPtr<ID3D12PipelineState>  m_godRayPSO;
+    bool  m_godRaysEnabled  = true;
+    float m_godRayStrength  = 1.0f;
+
+    // Bloom post-process
+    ComPtr<ID3D12Resource>       m_bloomExtractRT;
+    ComPtr<ID3D12Resource>       m_bloomBlurRT;
+    ComPtr<ID3D12DescriptorHeap> m_bloomSRVHeap;
+    ComPtr<ID3D12RootSignature>  m_bloomRootSig;
+    ComPtr<ID3D12PipelineState>  m_bloomBrightPSO;
+    ComPtr<ID3D12PipelineState>  m_bloomBlurPSO;
+    UINT  m_bloomSRVIncrSize = 0;
+    bool  m_bloomEnabled     = true;
+    float m_bloomThreshold   = 1.0f;
+    float m_bloomStrength    = 0.8f;
+
  
     //ConstantBuffer m_cbData;
     // Synchronization objects.
@@ -98,4 +123,10 @@ private:
     void PopulateCommandList();
     void WaitForPreviousFrame();
     void BuildImGuiUI();
+    void InitBloom();
+    void InitHDR();
+    void InitGodRays();
+    void RenderBloom();
+    void RenderGodRays();
+    void RenderToneMap();
 };

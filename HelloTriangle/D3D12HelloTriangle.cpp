@@ -135,7 +135,7 @@ void D3D12HelloTriangle::LoadPipeline()
     {
         // Describe and create a render target view (RTV) descriptor heap.
         D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
-        rtvHeapDesc.NumDescriptors = FrameCount;
+        rtvHeapDesc.NumDescriptors = FrameCount + 4; // +2 bloom, +1 HDR, +1 god ray
         rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         ThrowIfFailed(m_device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&m_rtvHeap)));
@@ -313,11 +313,14 @@ void D3D12HelloTriangle::LoadAssets()
         ThrowIfFailed(m_commandList->Close());
         ID3D12CommandList* ppInitCmds[] = { m_commandList.Get() };
         m_commandQueue->ExecuteCommandLists(_countof(ppInitCmds), ppInitCmds);
-        // Wait for the command list to execute; we are reusing the same command 
-        // list in our main loop but for now, we just want to wait for setup to 
+        // Wait for the command list to execute; we are reusing the same command
+        // list in our main loop but for now, we just want to wait for setup to
         // complete before continuing.
         WaitForPreviousFrame();
-    
+
+    InitBloom();
+    InitHDR();
+    InitGodRays();
 }
 
 // Update frame-based values.
@@ -357,6 +360,21 @@ void D3D12HelloTriangle::BuildImGuiUI()
 
     // ---- Weather ----
     ImGui::Separator(); ImGui::Text("--- Weather ---");
+    ImGui::SameLine();
+    bool showcase = m_renderer->IsShowcaseMode();
+    if (ImGui::Button(showcase ? "Showcase: ON" : "Showcase: OFF"))
+    {
+        if (showcase)
+        {
+            m_renderer->ToggleShowcase();
+            m_renderer->GetCamera().ExitShowcase();
+        }
+        else
+        {
+            m_renderer->ToggleShowcase();
+            m_renderer->GetCamera().EnterShowcase();
+        }
+    }
     bool isAuto = m_weatherSystem->IsAutoWeather();
     WeatherState cur = m_weatherSystem->GetCurrentState();
     int weatherIdx = isAuto ? 0 : (cur == WeatherState::Calm ? 1 : cur == WeatherState::Windy ? 2 : 3);
@@ -399,7 +417,524 @@ void D3D12HelloTriangle::BuildImGuiUI()
     if (ImGui::SliderFloat("Crescent Offset", &offsetAmt, 0.002f, 0.03f, "%.4f"))
         m_skyDome->SetCrescentOffsetAmt(offsetAmt);
 
+    // ---- Bloom ----
+    ImGui::Separator(); ImGui::Text("--- Bloom ---");
+    ImGui::SliderFloat("Exposure",  &m_exposure,       0.1f, 5.0f,  "%.2f");
+    ImGui::Checkbox("Enable Bloom", &m_bloomEnabled);
+    if (m_bloomEnabled)
+    {
+        ImGui::SliderFloat("Threshold", &m_bloomThreshold, 0.5f, 5.0f,  "%.2f");
+        ImGui::SliderFloat("Strength",  &m_bloomStrength,  0.1f, 3.0f,  "%.2f");
+    }
+    ImGui::Checkbox("God Rays", &m_godRaysEnabled);
+    if (m_godRaysEnabled)
+        ImGui::SliderFloat("GR Strength", &m_godRayStrength, 0.1f, 3.0f, "%.2f");
+
     ImGui::End();
+}
+
+void D3D12HelloTriangle::InitBloom()
+{
+    // --- Bloom RTs (R16F to preserve HDR values through blur) ---
+    {
+        auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto rtDesc   = CD3DX12_RESOURCE_DESC::Tex2D(
+            DXGI_FORMAT_R16G16B16A16_FLOAT, m_width, m_height, 1, 1);
+        rtDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        D3D12_CLEAR_VALUE clearVal = {};
+        clearVal.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &rtDesc,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &clearVal,
+            IID_PPV_ARGS(&m_bloomExtractRT)));
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &rtDesc,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &clearVal,
+            IID_PPV_ARGS(&m_bloomBlurRT)));
+    }
+
+    // --- RTVs in slots 2 and 3 ---
+    {
+        CD3DX12_CPU_DESCRIPTOR_HANDLE h(
+            m_rtvHeap->GetCPUDescriptorHandleForHeapStart(), 2, m_rtvDescriptorSize);
+        m_device->CreateRenderTargetView(m_bloomExtractRT.Get(), nullptr, h);
+        h.Offset(1, m_rtvDescriptorSize);
+        m_device->CreateRenderTargetView(m_bloomBlurRT.Get(), nullptr, h);
+    }
+
+    // --- SRV heap: [0]=hdrRT (set by InitHDR), [1]=extract, [2]=blur ---
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC hd = {};
+        hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.NumDescriptors = 4; // [0]=hdrRT [1]=bloomExtract [2]=bloomBlur [3]=godRayRT
+        hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ThrowIfFailed(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_bloomSRVHeap)));
+        m_bloomSRVIncrSize = m_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
+    // Static SRVs for bloom RTs (slots 1 and 2)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+        sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels     = 1;
+
+        m_device->CreateShaderResourceView(m_bloomExtractRT.Get(), &sd,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_bloomSRVHeap->GetCPUDescriptorHandleForHeapStart(), 1, m_bloomSRVIncrSize));
+        m_device->CreateShaderResourceView(m_bloomBlurRT.Get(), &sd,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_bloomSRVHeap->GetCPUDescriptorHandleForHeapStart(), 2, m_bloomSRVIncrSize));
+    }
+
+    // --- Bloom root signature: [0] SRV table t0, [1] 4 root constants b0 ---
+    {
+        CD3DX12_ROOT_PARAMETER params[2];
+        CD3DX12_DESCRIPTOR_RANGE srvRange;
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+        params[0].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_PIXEL);
+        params[1].InitAsConstants(4, 0);
+
+        CD3DX12_STATIC_SAMPLER_DESC sampler(0,
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+
+        CD3DX12_ROOT_SIGNATURE_DESC rsd;
+        rsd.Init(2, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+        ComPtr<ID3DBlob> sig, err;
+        ThrowIfFailed(D3D12SerializeRootSignature(&rsd,
+            D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err));
+        ThrowIfFailed(m_device->CreateRootSignature(0,
+            sig->GetBufferPointer(), sig->GetBufferSize(),
+            IID_PPV_ARGS(&m_bloomRootSig)));
+    }
+
+    // --- Load and create bloom bright-pass + blur PSOs (R16F output) ---
+    UINT8 *pVS = nullptr, *pBright = nullptr, *pBlur = nullptr;
+    UINT   vsLen = 0,      brightLen = 0,      blurLen = 0;
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"bloom_BloomVS.cso").c_str(),      &pVS,     &vsLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"bloom_BrightPassPS.cso").c_str(), &pBright, &brightLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"bloom_BlurPS.cso").c_str(),       &pBlur,   &blurLen));
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
+    pd.pRootSignature           = m_bloomRootSig.Get();
+    pd.VS                       = CD3DX12_SHADER_BYTECODE(pVS, vsLen);
+    pd.RasterizerState          = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    pd.BlendState               = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    pd.DepthStencilState.DepthEnable   = FALSE;
+    pd.DepthStencilState.StencilEnable = FALSE;
+    pd.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+    pd.SampleMask            = UINT_MAX;
+    pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pd.NumRenderTargets      = 1;
+    pd.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    pd.SampleDesc.Count      = 1;
+
+    pd.PS = CD3DX12_SHADER_BYTECODE(pBright, brightLen);
+    ThrowIfFailed(m_device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_bloomBrightPSO)));
+
+    pd.PS = CD3DX12_SHADER_BYTECODE(pBlur, blurLen);
+    ThrowIfFailed(m_device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_bloomBlurPSO)));
+}
+
+void D3D12HelloTriangle::InitHDR()
+{
+    // --- HDR render target (slot 4 in RTV heap) ---
+    {
+        auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto rtDesc   = CD3DX12_RESOURCE_DESC::Tex2D(
+            DXGI_FORMAT_R16G16B16A16_FLOAT, m_width, m_height, 1, 1);
+        rtDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        D3D12_CLEAR_VALUE clearVal = {};
+        clearVal.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &rtDesc,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &clearVal,
+            IID_PPV_ARGS(&m_hdrRT)));
+
+        CD3DX12_CPU_DESCRIPTOR_HANDLE hdrRtv(
+            m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
+            FrameCount + 2, m_rtvDescriptorSize); // slot 4
+        m_device->CreateRenderTargetView(m_hdrRT.Get(), nullptr, hdrRtv);
+    }
+
+    // --- SRV for hdrRT in slot 0 of m_bloomSRVHeap (static) ---
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+        sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels     = 1;
+        m_device->CreateShaderResourceView(m_hdrRT.Get(), &sd,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_bloomSRVHeap->GetCPUDescriptorHandleForHeapStart(), 0, m_bloomSRVIncrSize));
+    }
+
+    // --- Tone mapping root signature: [0] 2-SRV (t0=hdr,t1=bloom), [1] 1-SRV (t2=godrays), [2] 3 constants ---
+    {
+        CD3DX12_ROOT_PARAMETER params[3];
+        CD3DX12_DESCRIPTOR_RANGE srvRange1, srvRange2;
+        srvRange1.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0); // t0, t1
+        srvRange2.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2); // t2
+        params[0].InitAsDescriptorTable(1, &srvRange1, D3D12_SHADER_VISIBILITY_PIXEL);
+        params[1].InitAsDescriptorTable(1, &srvRange2, D3D12_SHADER_VISIBILITY_PIXEL);
+        params[2].InitAsConstants(3, 0); // bloomStrength, exposure, godRayStrength
+
+        CD3DX12_STATIC_SAMPLER_DESC sampler(0,
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+
+        CD3DX12_ROOT_SIGNATURE_DESC rsd;
+        rsd.Init(3, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+        ComPtr<ID3DBlob> sig, err;
+        ThrowIfFailed(D3D12SerializeRootSignature(&rsd,
+            D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err));
+        ThrowIfFailed(m_device->CreateRootSignature(0,
+            sig->GetBufferPointer(), sig->GetBufferSize(),
+            IID_PPV_ARGS(&m_toneMappingRootSig)));
+    }
+
+    // --- Tone mapping PSO (output to LDR swap chain format) ---
+    {
+        UINT8 *pVS = nullptr, *pPS = nullptr;
+        UINT   vsLen = 0,      psLen = 0;
+        ThrowIfFailed(ReadDataFromFile(
+            GetAssetFullPath(L"tonemapping_ToneMapVS.cso").c_str(), &pVS, &vsLen));
+        ThrowIfFailed(ReadDataFromFile(
+            GetAssetFullPath(L"tonemapping_ToneMapPS.cso").c_str(), &pPS, &psLen));
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
+        pd.pRootSignature           = m_toneMappingRootSig.Get();
+        pd.VS                       = CD3DX12_SHADER_BYTECODE(pVS, vsLen);
+        pd.PS                       = CD3DX12_SHADER_BYTECODE(pPS, psLen);
+        pd.RasterizerState          = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        pd.BlendState               = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+        pd.DepthStencilState.DepthEnable   = FALSE;
+        pd.DepthStencilState.StencilEnable = FALSE;
+        pd.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+        pd.SampleMask            = UINT_MAX;
+        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pd.NumRenderTargets      = 1;
+        pd.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+        pd.SampleDesc.Count      = 1;
+        ThrowIfFailed(m_device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_toneMappingPSO)));
+    }
+}
+
+void D3D12HelloTriangle::RenderBloom()
+{
+    auto* cmd = m_commandList.Get();
+
+    // When bloom is disabled we still need hdrRT in PSR for tone mapping
+    if (!m_bloomEnabled)
+    {
+        auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_hdrRT.Get(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        cmd->ResourceBarrier(1, &bar);
+        return;
+    }
+
+    const float kBlack[] = { 0, 0, 0, 0 };
+    auto rtvExtract = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+        m_rtvHeap->GetCPUDescriptorHandleForHeapStart(), 2, m_rtvDescriptorSize);
+    auto rtvBlur = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+        m_rtvHeap->GetCPUDescriptorHandleForHeapStart(), 3, m_rtvDescriptorSize);
+    auto gpuSlot0 = CD3DX12_GPU_DESCRIPTOR_HANDLE(
+        m_bloomSRVHeap->GetGPUDescriptorHandleForHeapStart(), 0, m_bloomSRVIncrSize);
+    auto gpuSlot1 = CD3DX12_GPU_DESCRIPTOR_HANDLE(
+        m_bloomSRVHeap->GetGPUDescriptorHandleForHeapStart(), 1, m_bloomSRVIncrSize);
+    auto gpuSlot2 = CD3DX12_GPU_DESCRIPTOR_HANDLE(
+        m_bloomSRVHeap->GetGPUDescriptorHandleForHeapStart(), 2, m_bloomSRVIncrSize);
+
+    cmd->SetGraphicsRootSignature(m_bloomRootSig.Get());
+    ID3D12DescriptorHeap* heaps[] = { m_bloomSRVHeap.Get() };
+    cmd->SetDescriptorHeaps(1, heaps);
+    cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmd->RSSetViewports(1, &m_viewport);
+    cmd->RSSetScissorRects(1, &m_scissorRect);
+
+    // === BRIGHT PASS: hdrRT(RT→PSR) → extractRT ===
+    {
+        auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_hdrRT.Get(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        cmd->ResourceBarrier(1, &bar);
+    }
+    float pBright[4] = { m_bloomThreshold, 0.f, 0.f, 0.f };
+    cmd->SetPipelineState(m_bloomBrightPSO.Get());
+    cmd->SetGraphicsRoot32BitConstants(1, 4, pBright, 0);
+    cmd->SetGraphicsRootDescriptorTable(0, gpuSlot0);
+    cmd->OMSetRenderTargets(1, &rtvExtract, FALSE, nullptr);
+    cmd->ClearRenderTargetView(rtvExtract, kBlack, 0, nullptr);
+    cmd->DrawInstanced(3, 1, 0, 0);
+
+    // === BLUR: 2 H+V iterations (ping-pong extract ↔ blur) ===
+    float pBlurH[4] = { 0.f, 0.f, 1.f, 0.f };
+    float pBlurV[4] = { 0.f, 0.f, 0.f, 1.f };
+    for (int iter = 0; iter < 2; ++iter)
+    {
+        {
+            auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+                m_bloomExtractRT.Get(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+            cmd->ResourceBarrier(1, &bar);
+        }
+        if (iter > 0)
+        {
+            auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+                m_bloomBlurRT.Get(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_RENDER_TARGET);
+            cmd->ResourceBarrier(1, &bar);
+        }
+        cmd->SetPipelineState(m_bloomBlurPSO.Get());
+        cmd->SetGraphicsRoot32BitConstants(1, 4, pBlurH, 0);
+        cmd->SetGraphicsRootDescriptorTable(0, gpuSlot1);
+        cmd->OMSetRenderTargets(1, &rtvBlur, FALSE, nullptr);
+        cmd->ClearRenderTargetView(rtvBlur, kBlack, 0, nullptr);
+        cmd->DrawInstanced(3, 1, 0, 0);
+
+        {
+            D3D12_RESOURCE_BARRIER bars[2] = {
+                CD3DX12_RESOURCE_BARRIER::Transition(m_bloomBlurRT.Get(),
+                    D3D12_RESOURCE_STATE_RENDER_TARGET,
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+                CD3DX12_RESOURCE_BARRIER::Transition(m_bloomExtractRT.Get(),
+                    D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                    D3D12_RESOURCE_STATE_RENDER_TARGET),
+            };
+            cmd->ResourceBarrier(2, bars);
+        }
+        cmd->SetGraphicsRoot32BitConstants(1, 4, pBlurV, 0);
+        cmd->SetGraphicsRootDescriptorTable(0, gpuSlot2);
+        cmd->OMSetRenderTargets(1, &rtvExtract, FALSE, nullptr);
+        cmd->ClearRenderTargetView(rtvExtract, kBlack, 0, nullptr);
+        cmd->DrawInstanced(3, 1, 0, 0);
+    }
+    // After loop: hdrRT=PSR, extractRT=RT (final bloom), blurRT=PSR
+}
+
+void D3D12HelloTriangle::InitGodRays()
+{
+    UINT grW = m_width / 2, grH = m_height / 2;
+
+    // --- God ray RT (half resolution, slot 5 in RTV heap) ---
+    {
+        auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto rtDesc   = CD3DX12_RESOURCE_DESC::Tex2D(
+            DXGI_FORMAT_R16G16B16A16_FLOAT, grW, grH, 1, 1);
+        rtDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        D3D12_CLEAR_VALUE clearVal = {};
+        clearVal.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &rtDesc,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &clearVal,
+            IID_PPV_ARGS(&m_godRayRT)));
+
+        CD3DX12_CPU_DESCRIPTOR_HANDLE rtv(
+            m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
+            FrameCount + 3, m_rtvDescriptorSize); // slot 5
+        m_device->CreateRenderTargetView(m_godRayRT.Get(), nullptr, rtv);
+    }
+
+    // --- SRV in slot 3 of m_bloomSRVHeap ---
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+        sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels     = 1;
+        m_device->CreateShaderResourceView(m_godRayRT.Get(), &sd,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_bloomSRVHeap->GetCPUDescriptorHandleForHeapStart(),
+                3, m_bloomSRVIncrSize));
+    }
+
+    // --- God ray root signature: [0] 1-SRV (t0=hdrRT), [1] 6 root constants ---
+    {
+        CD3DX12_ROOT_PARAMETER params[2];
+        CD3DX12_DESCRIPTOR_RANGE srvRange;
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+        params[0].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_PIXEL);
+        params[1].InitAsConstants(6, 0); // sunScreenXY, density, decay, weight, sunVis
+
+        CD3DX12_STATIC_SAMPLER_DESC sampler(0,
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+
+        CD3DX12_ROOT_SIGNATURE_DESC rsd;
+        rsd.Init(2, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+        ComPtr<ID3DBlob> sig, err;
+        ThrowIfFailed(D3D12SerializeRootSignature(&rsd,
+            D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err));
+        ThrowIfFailed(m_device->CreateRootSignature(0,
+            sig->GetBufferPointer(), sig->GetBufferSize(),
+            IID_PPV_ARGS(&m_godRayRootSig)));
+    }
+
+    // --- God ray PSO ---
+    {
+        UINT8 *pVS = nullptr, *pPS = nullptr;
+        UINT   vsLen = 0,      psLen = 0;
+        ThrowIfFailed(ReadDataFromFile(
+            GetAssetFullPath(L"godrays_GodRayVS.cso").c_str(), &pVS, &vsLen));
+        ThrowIfFailed(ReadDataFromFile(
+            GetAssetFullPath(L"godrays_GodRayPS.cso").c_str(), &pPS, &psLen));
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
+        pd.pRootSignature           = m_godRayRootSig.Get();
+        pd.VS                       = CD3DX12_SHADER_BYTECODE(pVS, vsLen);
+        pd.PS                       = CD3DX12_SHADER_BYTECODE(pPS, psLen);
+        pd.RasterizerState          = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        pd.BlendState               = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+        pd.DepthStencilState.DepthEnable   = FALSE;
+        pd.DepthStencilState.StencilEnable = FALSE;
+        pd.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+        pd.SampleMask            = UINT_MAX;
+        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pd.NumRenderTargets      = 1;
+        pd.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        pd.SampleDesc.Count      = 1;
+        ThrowIfFailed(m_device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_godRayPSO)));
+    }
+}
+
+void D3D12HelloTriangle::RenderGodRays()
+{
+    auto* cmd = m_commandList.Get();
+
+    auto godRayRtv = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+        m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
+        FrameCount + 3, m_rtvDescriptorSize);
+
+    const float kBlack[] = { 0, 0, 0, 0 };
+    cmd->ClearRenderTargetView(godRayRtv, kBlack, 0, nullptr);
+
+    if (!m_godRaysEnabled) return;
+
+    // Project sun to screen UV
+    XMFLOAT3 sd3 = m_skyDome->GetSunDirection();
+    XMVECTOR sunWorld = XMVector3Normalize(XMLoadFloat3(&sd3));
+    sunWorld = XMVectorSetW(XMVectorScale(sunWorld, 999.0f), 1.0f);
+    XMMATRIX vp = XMMatrixMultiply(m_renderer->GetViewMatrix(), m_renderer->GetProjMatrix());
+    XMVECTOR clip = XMVector4Transform(sunWorld, vp);
+
+    float w = XMVectorGetW(clip);
+    float sunScreenX = 0.5f, sunScreenY = 0.5f, sunVis = 0.0f;
+    if (w > 0.0f)
+    {
+        sunScreenX = XMVectorGetX(clip) / w * 0.5f + 0.5f;
+        sunScreenY = -XMVectorGetY(clip) / w * 0.5f + 0.5f;
+        // Fade by sun height and how far off-screen the sun is
+        sunVis = std::clamp(sd3.y * 3.0f + 0.3f, 0.0f, 1.0f);
+        float ax = fabsf(sunScreenX - 0.5f), ay = fabsf(sunScreenY - 0.5f);
+        float offScreen = ax > ay ? ax : ay;
+        sunVis *= std::clamp(1.0f - (offScreen - 0.5f) * 3.0f, 0.0f, 1.0f);
+    }
+
+    if (sunVis <= 0.001f) return;
+
+    // Draw god ray radial blur into half-res RT
+    UINT grW = m_width / 2, grH = m_height / 2;
+    D3D12_VIEWPORT grVP = { 0, 0, (float)grW, (float)grH, 0, 1 };
+    D3D12_RECT     grSC = { 0, 0, (LONG)grW,  (LONG)grH };
+
+    struct GRParams { float sx, sy, density, decay, weight, vis; } p = {
+        sunScreenX, sunScreenY, 0.96f, 0.97f, 0.04f, sunVis
+    };
+
+    cmd->SetGraphicsRootSignature(m_godRayRootSig.Get());
+    ID3D12DescriptorHeap* heaps[] = { m_bloomSRVHeap.Get() };
+    cmd->SetDescriptorHeaps(1, heaps);
+    cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmd->RSSetViewports(1, &grVP);
+    cmd->RSSetScissorRects(1, &grSC);
+    cmd->SetPipelineState(m_godRayPSO.Get());
+    cmd->SetGraphicsRoot32BitConstants(1, 6, &p, 0);
+    cmd->SetGraphicsRootDescriptorTable(0,
+        m_bloomSRVHeap->GetGPUDescriptorHandleForHeapStart()); // slot 0 = hdrRT
+    cmd->OMSetRenderTargets(1, &godRayRtv, FALSE, nullptr);
+    cmd->DrawInstanced(3, 1, 0, 0);
+}
+
+void D3D12HelloTriangle::RenderToneMap()
+{
+    auto* cmd = m_commandList.Get();
+
+    // Transition bloom extract and god ray RT to PSR for reading
+    {
+        D3D12_RESOURCE_BARRIER bars[2] = {
+            CD3DX12_RESOURCE_BARRIER::Transition(m_bloomExtractRT.Get(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+            CD3DX12_RESOURCE_BARRIER::Transition(m_godRayRT.Get(),
+                D3D12_RESOURCE_STATE_RENDER_TARGET,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+        };
+        cmd->ResourceBarrier(2, bars);
+    }
+
+    auto rtvSwap = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+        m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
+        m_frameIndex, m_rtvDescriptorSize);
+
+    auto gpuSlot0 = m_bloomSRVHeap->GetGPUDescriptorHandleForHeapStart(); // hdrRT+bloom (slots 0,1)
+    auto gpuSlot3 = CD3DX12_GPU_DESCRIPTOR_HANDLE(
+        m_bloomSRVHeap->GetGPUDescriptorHandleForHeapStart(), 3, m_bloomSRVIncrSize); // god ray
+
+    cmd->SetGraphicsRootSignature(m_toneMappingRootSig.Get());
+    ID3D12DescriptorHeap* heaps[] = { m_bloomSRVHeap.Get() };
+    cmd->SetDescriptorHeaps(1, heaps);
+    cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmd->RSSetViewports(1, &m_viewport);
+    cmd->RSSetScissorRects(1, &m_scissorRect);
+
+    float params[3] = { m_bloomStrength, m_exposure, m_godRayStrength };
+    cmd->SetPipelineState(m_toneMappingPSO.Get());
+    cmd->SetGraphicsRoot32BitConstants(2, 3, params, 0);
+    cmd->SetGraphicsRootDescriptorTable(0, gpuSlot0);
+    cmd->SetGraphicsRootDescriptorTable(1, gpuSlot3);
+    cmd->OMSetRenderTargets(1, &rtvSwap, FALSE, nullptr);
+    cmd->DrawInstanced(3, 1, 0, 0);
+
+    // Cleanup: restore all intermediate RTs to RENDER_TARGET
+    D3D12_RESOURCE_BARRIER cleanup[3] = {
+        CD3DX12_RESOURCE_BARRIER::Transition(m_hdrRT.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET),
+        CD3DX12_RESOURCE_BARRIER::Transition(m_bloomExtractRT.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET),
+        CD3DX12_RESOURCE_BARRIER::Transition(m_godRayRT.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET),
+    };
+    cmd->ResourceBarrier(3, cleanup);
+
+    if (m_bloomEnabled)
+    {
+        auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_bloomBlurRT.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET);
+        cmd->ResourceBarrier(1, &bar);
+    }
 }
 
 // Render the scene.
@@ -428,9 +963,10 @@ void D3D12HelloTriangle::OnRender()
     RenderContext ctx;
     ctx.cmd = m_commandList.Get();
     ctx.renderTarget = m_renderTargets[m_frameIndex].Get();
+    // Scene renders into HDR RT (slot FrameCount+2 = 4)
     ctx.rtv = CD3DX12_CPU_DESCRIPTOR_HANDLE(
         m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
-        m_frameIndex, m_rtvDescriptorSize);
+        FrameCount + 2, m_rtvDescriptorSize);
     ctx.viewport = m_viewport;
     ctx.scissor = m_scissorRect;
     ctx.dsv = m_renderer->GetDSVHeap()
@@ -471,6 +1007,10 @@ void D3D12HelloTriangle::OnRender()
         m_renderer->GetViewMatrix(),
         m_renderer->GetProjMatrix(),
         m_renderer->GetCameraPos());
+
+    RenderBloom();
+    RenderGodRays();
+    RenderToneMap();
 
     // ImGui 渲染（在 RT→Present barrier 之前）
     {

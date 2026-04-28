@@ -89,6 +89,8 @@ private:
         float     moonOccludePow;    // 遮挡圆大小（pow 指数）
         float     crescentOffsetAmt; // 月牙偏移量
         float     padMoonParams;
+        float     lightningIntensity;
+        float     padLightning[3];
     };
     // 总计 = 64+16+16+16+12+4+4+4+4+4 = 144字节
     // __declspec(align(256))保证整个结构体从256字节对齐的地址开始
@@ -124,6 +126,8 @@ private:
     float     m_cloudSharpness = 0.6f;
     bool      m_showcaseMode = false;
     float m_weatherIntensity = 0.0f; // 0=晴天, 1=暴风
+    float m_lightningIntensity = 0.0f;
+    float m_lightningCooldown  = 3.0f; // 首次触发前等待时间
     UINT m_width = 0;
     UINT m_height = 0;
 };
