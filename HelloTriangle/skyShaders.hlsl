@@ -14,6 +14,12 @@
     float padSunColor;
     float3 moonPosition;
     float padMoon;
+    float3 moonCrescentDir; // 独立月牙朝向，由 CPU 缓慢旋转
+    float padCrescent;
+    float moonBodyPow;
+    float moonOccludePow;
+    float crescentOffsetAmt;
+    float padMoonParams;
 };
 
 struct VSInput
@@ -255,28 +261,13 @@ float4 skyPS(VSOutput input) : SV_Target
     float3 moonDir = moonPosition.xyz;
     float moonDot = max(0.0f, dot(normalizedPos, moonDir));
 
-// 用世界空间 up 向量构建月亮切平面的固定切线
-    float3 up = float3(0.0f, 1.0f, 0.0f);
-    float3 tangent = normalize(up - dot(up, moonDir) * moonDir);
-    float3 bitangent = normalize(cross(moonDir, tangent));
-
-// 太阳在月亮切平面上的投影，得到月牙开口方向
-    float3 sunDir3 = sunPosition.xyz;
-    float tProj = dot(sunDir3, tangent);
-    float bProj = dot(sunDir3, bitangent);
-    float3 sunOnPlane = normalize(tangent * tProj + bitangent * bProj + float3(0, 0, 0.001));
-
-    // 太阳月亮夹角控制月相
-    float sunMoonAngle = dot(sunDir3, moonDir);
-    float phaseOffset = (sunMoonAngle + 1.0f) * 0.5f; // 0=新月, 1=满月
-    
-    float crescentAmount = 0.012f; // 固定中等月牙，不随太阳变化
-    float3 crescentDir = normalize(moonDir + sunOnPlane * crescentAmount);
+    // 使用 CPU 传入的缓慢旋转方向，与太阳实时位置解耦，避免月亮过地平线时月牙朝向突变
+    float3 crescentDir = normalize(moonDir - moonCrescentDir * crescentOffsetAmt);
     float crescentDot = max(0.0f, dot(normalizedPos, crescentDir));
 
-    float moonBody = pow(moonDot, 1000.0f); // 控制月亮大小
-    float moonOcclude = pow(crescentDot, 1400.0f); // 控制遮挡圆大小
-    float moonCrescent = saturate(moonBody - moonOcclude * 2.0f); 
+    float moonBody    = pow(moonDot,    moonBodyPow);
+    float moonOcclude = pow(crescentDot, moonOccludePow);
+    float moonCrescent = saturate(moonBody - moonOcclude * 2.0f);
     skyColor.rgb += float3(1.0f, 1.0f, 0.95f) * moonCrescent * 8.0f;
     
     

@@ -187,12 +187,16 @@ void SkyDome::Update(float deltaTime)
     float moonAngle = m_time * 0.23f; // 比太阳慢，产生月相周期
     float moonTilt = 0.4f;           // 轨道倾角略有不同
 
-    // 太阳在天空时月亮沉入地平线
-    if (m_sunDir.y > 0.0f)
+    // 月亮与太阳对立，在日出/日落时平滑过地平线（避免硬跳）
     {
-        // 太阳在上，月亮强制沉下去
+        // sunBlend: 太阳完全在地平线下时=0，完全升起时=1，[-0.1,+0.1] 范围内平滑过渡
+        float sunBlend = std::clamp((m_sunDir.y + 0.1f) / 0.2f, 0.0f, 1.0f);
+        sunBlend = sunBlend * sunBlend * (3.0f - 2.0f * sunBlend); // smoothstep
+        // 太阳在下时偏移 +0.1（月亮略高于地平线），太阳在上时偏移 -0.1（月亮略低于地平线）
+        float moonYOffset = std::lerp(0.1f, -0.1f, sunBlend);
+
         m_moonDir.x = -m_sunDir.x;
-        m_moonDir.y = -abs(m_sunDir.y) - 0.1f; // 强制为负，沉入地平线以下
+        m_moonDir.y = -m_sunDir.y + moonYOffset;
         m_moonDir.z = -m_sunDir.z;
         float len = sqrtf(m_moonDir.x * m_moonDir.x +
             m_moonDir.y * m_moonDir.y +
@@ -201,19 +205,33 @@ void SkyDome::Update(float deltaTime)
         m_moonDir.y /= len;
         m_moonDir.z /= len;
     }
-    else
+    // 月牙朝向：绕月亮轴缓慢旋转，与太阳解耦，约 90 秒转一圈
     {
-        // 太阳落下，月亮升起
-        m_moonDir.x = -m_sunDir.x;
-        m_moonDir.y = abs(m_sunDir.y) + 0.1f; // 强制为正，升上地平线
-        m_moonDir.z = -m_sunDir.z;
-        float len = sqrtf(m_moonDir.x * m_moonDir.x +
-            m_moonDir.y * m_moonDir.y +
-            m_moonDir.z * m_moonDir.z);
-        m_moonDir.x /= len;
-        m_moonDir.y /= len;
-        m_moonDir.z /= len;
+        // 先把 m_crescentDir 投影到垂直于 moonDir 的平面，防止数值漂移
+        float dotCM = m_crescentDir.x * m_moonDir.x + m_crescentDir.y * m_moonDir.y + m_crescentDir.z * m_moonDir.z;
+        m_crescentDir.x -= dotCM * m_moonDir.x;
+        m_crescentDir.y -= dotCM * m_moonDir.y;
+        m_crescentDir.z -= dotCM * m_moonDir.z;
+        float clen = sqrtf(m_crescentDir.x * m_crescentDir.x + m_crescentDir.y * m_crescentDir.y + m_crescentDir.z * m_crescentDir.z);
+        if (clen > 0.001f) { m_crescentDir.x /= clen; m_crescentDir.y /= clen; m_crescentDir.z /= clen; }
+
+        // Rodrigues 绕 moonDir 旋转一小角度
+        float rotSpeed = deltaTime * m_crescentRotSpeed;
+        float cosA = cosf(rotSpeed), sinA = sinf(rotSpeed);
+        XMFLOAT3 k = m_moonDir, v = m_crescentDir;
+        // k×v（v 已垂直于 k，dot(k,v)≈0，公式简化为 v*cos + (k×v)*sin）
+        XMFLOAT3 crossKV = {
+            k.y * v.z - k.z * v.y,
+            k.z * v.x - k.x * v.z,
+            k.x * v.y - k.y * v.x
+        };
+        m_crescentDir = {
+            v.x * cosA + crossKV.x * sinA,
+            v.y * cosA + crossKV.y * sinA,
+            v.z * cosA + crossKV.z * sinA
+        };
     }
+
     // 云参数
     float cycle1 = sinf(m_time * 0.2f) * 0.5f + 0.5f;
     float cycle2 = cosf(m_time * 0.15f) * 0.5f + 0.5f;
@@ -257,6 +275,12 @@ void SkyDome::Render(RenderContext& ctx)
     cb.padSunColor = 0.0f;
 	cb.moonPosition = m_moonDir;
 	cb.padMoon = 0.0f;
+    cb.moonCrescentDir   = m_crescentDir;
+    cb.padCrescent       = 0.0f;
+    cb.moonBodyPow       = m_moonBodyPow;
+    cb.moonOccludePow    = m_moonOccludePow;
+    cb.crescentOffsetAmt = m_crescentOffsetAmt;
+    cb.padMoonParams     = 0.0f;
     memcpy(m_cbMapped, &cb, sizeof(cb));
 
     // 切换到天空PSO

@@ -23,6 +23,9 @@
 #include "source/OceanFFT.h"
 #include "source/WeatherSystem.h"
 #include "source/RainSystem.h"
+#include "ImGUI/imgui.h"
+#include "ImGUI/imgui_impl_win32.h"
+#include "ImGUI/imgui_impl_dx12.h"
 
 using namespace DirectX;
 
@@ -73,6 +76,7 @@ private:
     ComPtr<ID3D12CommandQueue> m_commandQueue;
     ComPtr<ID3D12RootSignature> m_rootSignature;
     ComPtr<ID3D12DescriptorHeap> m_rtvHeap;
+    ComPtr<ID3D12DescriptorHeap> m_imguiSrvHeap;
     ComPtr<ID3D12GraphicsCommandList> m_commandList;
     UINT m_rtvDescriptorSize;
 
@@ -85,8 +89,13 @@ private:
     UINT64 m_fenceValue;
 
 
+    // UI 状态
+    float m_timeScale   = 1.0f;
+    bool  m_timePaused  = false;
+
     void LoadPipeline();
     void LoadAssets();
     void PopulateCommandList();
     void WaitForPreviousFrame();
+    void BuildImGuiUI();
 };

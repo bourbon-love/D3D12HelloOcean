@@ -29,6 +29,7 @@ public:
 
     WeatherState GetCurrentState() const { return m_targetState; }
 	void SetAutoWeather(bool autoWeather) { m_autoWeather = autoWeather; }
+    bool IsAutoWeather() const { return m_autoWeather; }
     float GetWeatherIntensity() const { return m_currentParams.weatherIntensity; }
 
 private:

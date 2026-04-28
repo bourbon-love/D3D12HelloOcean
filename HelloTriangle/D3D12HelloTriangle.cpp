@@ -31,8 +31,25 @@ void D3D12HelloTriangle::OnInit()
     LoadPipeline();
     LoadAssets();
 	m_lastTime = std::chrono::steady_clock::now();
-
 	m_renderer->SetSkyDome(m_skyDome.get());
+
+    // ImGui 初始化
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+        heapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.NumDescriptors = 1;
+        heapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ThrowIfFailed(m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_imguiSrvHeap)));
+    }
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGui::StyleColorsDark();
+    ImGui_ImplWin32_Init(Win32Application::GetHwnd());
+    ImGui_ImplDX12_Init(m_device.Get(), FrameCount,
+        DXGI_FORMAT_R8G8B8A8_UNORM,
+        m_imguiSrvHeap.Get(),
+        m_imguiSrvHeap->GetCPUDescriptorHandleForHeapStart(),
+        m_imguiSrvHeap->GetGPUDescriptorHandleForHeapStart());
 }
 
 // Load the rendering pipeline dependencies.
@@ -306,16 +323,83 @@ void D3D12HelloTriangle::LoadAssets()
 // Update frame-based values.
 void D3D12HelloTriangle::OnUpdate()
 {
-	// Update the scene.
 	auto currentTime = std::chrono::steady_clock::now();
 	float deltaTime = std::chrono::duration<float>(currentTime - m_lastTime).count();
-    float weatherIntensity = m_weatherSystem->GetWeatherIntensity();
 	m_lastTime = currentTime;
-    m_skyDome->Update(deltaTime);
-    m_renderer->Update(deltaTime);
-    m_weatherSystem->Update(deltaTime);
-    m_rainSystem->Update(deltaTime,weatherIntensity,
+
+    float scaledDt = m_timePaused ? 0.0f : deltaTime * m_timeScale;
+    float weatherIntensity = m_weatherSystem->GetWeatherIntensity();
+
+    m_skyDome->Update(scaledDt);
+    m_renderer->Update(scaledDt);
+    m_weatherSystem->Update(scaledDt);
+    m_rainSystem->Update(scaledDt, weatherIntensity,
         m_oceanFFT->windDirX, m_oceanFFT->windDirY);
+
+    // ImGui 帧
+    ImGui_ImplDX12_NewFrame();
+    ImGui_ImplWin32_NewFrame(1.0f, 1.0f);
+    ImGui::NewFrame();
+    BuildImGuiUI();
+    ImGui::Render();
+}
+
+void D3D12HelloTriangle::BuildImGuiUI()
+{
+    ImGui::Begin("Scene Controls");
+
+    // ---- Time ----
+    ImGui::Separator(); ImGui::Text("--- Time ---");
+    ImGui::SliderFloat("Time Scale", &m_timeScale, 0.0f, 10.0f, "%.2f x");
+    ImGui::SameLine();
+    if (ImGui::Button(m_timePaused ? "Resume" : "Pause"))
+        m_timePaused = !m_timePaused;
+
+    // ---- Weather ----
+    ImGui::Separator(); ImGui::Text("--- Weather ---");
+    bool isAuto = m_weatherSystem->IsAutoWeather();
+    WeatherState cur = m_weatherSystem->GetCurrentState();
+    int weatherIdx = isAuto ? 0 : (cur == WeatherState::Calm ? 1 : cur == WeatherState::Windy ? 2 : 3);
+
+    const char* weatherLabels[] = { "Auto", "Calm", "Windy", "Storm" };
+    for (int i = 0; i < 4; i++)
+    {
+        if (i > 0) ImGui::SameLine();
+        if (ImGui::RadioButton(weatherLabels[i], weatherIdx == i))
+        {
+            if (i == 0)
+            {
+                m_weatherSystem->SetAutoWeather(true);
+            }
+            else
+            {
+                m_weatherSystem->SetAutoWeather(false);
+                WeatherState states[] = { WeatherState::Calm, WeatherState::Calm, WeatherState::Windy, WeatherState::Storm };
+                m_weatherSystem->SetWeather(states[i], 3.0f);
+            }
+        }
+    }
+
+    // ---- Moon ----
+    ImGui::Separator(); ImGui::Text("--- Moon ---");
+
+    float rotSpeed = m_skyDome->GetCrescentRotSpeed();
+    if (ImGui::SliderFloat("Crescent Rot Speed", &rotSpeed, 0.0f, 0.5f, "%.3f"))
+        m_skyDome->SetCrescentRotSpeed(rotSpeed);
+
+    float bodyPow = m_skyDome->GetMoonBodyPow();
+    if (ImGui::SliderFloat("Moon Size (exp)", &bodyPow, 300.0f, 2000.0f, "%.0f"))
+        m_skyDome->SetMoonBodyPow(bodyPow);
+
+    float occludePow = m_skyDome->GetMoonOccludePow();
+    if (ImGui::SliderFloat("Occlude Size (exp)", &occludePow, 400.0f, 3000.0f, "%.0f"))
+        m_skyDome->SetMoonOccludePow(occludePow);
+
+    float offsetAmt = m_skyDome->GetCrescentOffsetAmt();
+    if (ImGui::SliderFloat("Crescent Offset", &offsetAmt, 0.002f, 0.03f, "%.4f"))
+        m_skyDome->SetCrescentOffsetAmt(offsetAmt);
+
+    ImGui::End();
 }
 
 // Render the scene.
@@ -388,6 +472,13 @@ void D3D12HelloTriangle::OnRender()
         m_renderer->GetProjMatrix(),
         m_renderer->GetCameraPos());
 
+    // ImGui 渲染（在 RT→Present barrier 之前）
+    {
+        ID3D12DescriptorHeap* imguiHeaps[] = { m_imguiSrvHeap.Get() };
+        m_commandList->SetDescriptorHeaps(1, imguiHeaps);
+        ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), m_commandList.Get());
+    }
+
     // RenderTarget → Present
     auto barrierToPresent = CD3DX12_RESOURCE_BARRIER::Transition(
         ctx.renderTarget,
@@ -421,15 +512,16 @@ void D3D12HelloTriangle::OnRender()
 
 void D3D12HelloTriangle::OnDestroy()
 {
-    // Ensure that the GPU is no longer referencing resources that are about to be
-    // cleaned up by the destructor.
     WaitForPreviousFrame();
-
+    ImGui_ImplDX12_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
     CloseHandle(m_fenceEvent);
 }
 
 void D3D12HelloTriangle::OnMouseMove(float dx, float dy)
 {
+    if (ImGui::GetIO().WantCaptureMouse) return;
     m_renderer->OnMouseMove(dx, dy);
 }
 
