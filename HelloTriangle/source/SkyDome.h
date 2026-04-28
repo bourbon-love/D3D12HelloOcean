@@ -48,6 +48,16 @@ public:
     void SetWeatherIntensity(float intensity) { m_weatherIntensity = intensity; }
     void SetShowcaseMode(bool showcase) { m_showcaseMode = showcase; }
 
+    // 月亮参数（供 ImGui 读写）
+    float GetCrescentRotSpeed()  const { return m_crescentRotSpeed; }
+    float GetMoonBodyPow()       const { return m_moonBodyPow; }
+    float GetMoonOccludePow()    const { return m_moonOccludePow; }
+    float GetCrescentOffsetAmt() const { return m_crescentOffsetAmt; }
+    void SetCrescentRotSpeed(float v)  { m_crescentRotSpeed  = v; }
+    void SetMoonBodyPow(float v)       { m_moonBodyPow       = v; }
+    void SetMoonOccludePow(float v)    { m_moonOccludePow    = v; }
+    void SetCrescentOffsetAmt(float v) { m_crescentOffsetAmt = v; }
+
 
 private:
     void CreateSphereMesh(ComPtr<ID3D12GraphicsCommandList> cmdList);
@@ -73,6 +83,12 @@ private:
         float     padSunColor;
         XMFLOAT3  moonPosition;
         float     padMoon;
+        XMFLOAT3  moonCrescentDir; // 独立月牙朝向，每帧缓慢旋转
+        float     padCrescent;
+        float     moonBodyPow;       // 月盘大小（pow 指数，越大越小）
+        float     moonOccludePow;    // 遮挡圆大小（pow 指数）
+        float     crescentOffsetAmt; // 月牙偏移量
+        float     padMoonParams;
     };
     // 总计 = 64+16+16+16+12+4+4+4+4+4 = 144字节
     // __declspec(align(256))保证整个结构体从256字节对齐的地址开始
@@ -98,6 +114,11 @@ private:
     float     m_time = 0.0f;
     XMFLOAT3  m_sunDir = { 1.0f, 0.0f, 0.0f };
 	XMFLOAT3  m_moonDir = { -1.0f, 0.2f, 0.0f };
+    XMFLOAT3  m_crescentDir = { 0.0f, 0.0f, 1.0f }; // 月牙遮挡圆方向，绕月亮轴缓慢旋转
+    float     m_crescentRotSpeed  = 0.07f;
+    float     m_moonBodyPow       = 1000.0f;
+    float     m_moonOccludePow    = 1300.0f;
+    float     m_crescentOffsetAmt = 0.012f;
     float     m_cloudDensity = 0.5f;
     float     m_cloudScale = 0.85f;
     float     m_cloudSharpness = 0.6f;

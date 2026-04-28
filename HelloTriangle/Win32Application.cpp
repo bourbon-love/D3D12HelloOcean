@@ -10,6 +10,9 @@
 //*********************************************************
 
 #include "Win32Application.h"
+#include "ImGUI/imgui.h"
+#include "ImGUI/imgui_impl_win32.h"
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 HWND Win32Application::m_hwnd = nullptr;
 POINT Win32Application::m_lastMousePos = {};  
@@ -78,6 +81,9 @@ LRESULT CALLBACK Win32Application::WindowProc(HWND hWnd, UINT message, WPARAM wP
 {
     DXSample* pSample = reinterpret_cast<DXSample*>(GetWindowLongPtr(hWnd, GWLP_USERDATA));
 
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, message, wParam, lParam))
+        return true;
+
     switch (message)
     {
     case WM_CREATE:
@@ -116,6 +122,7 @@ LRESULT CALLBACK Win32Application::WindowProc(HWND hWnd, UINT message, WPARAM wP
 
     case WM_LBUTTONDOWN:
     {
+        if (ImGui::GetIO().WantCaptureMouse) return 0;
         // 按下左键时捕获鼠标，锁定到窗口
         SetCapture(hWnd);
         GetCursorPos(&Win32Application::m_lastMousePos);
