@@ -46,8 +46,8 @@ public:
         m_cloudSharpness = sharpness;
     }
     void SetWeatherIntensity(float intensity) { m_weatherIntensity = intensity; }
+    void SetShowcaseMode(bool showcase) { m_showcaseMode = showcase; }
 
-    float m_weatherIntensity = 0.0f; // 0=晴天, 1=暴风
 
 private:
     void CreateSphereMesh(ComPtr<ID3D12GraphicsCommandList> cmdList);
@@ -101,7 +101,8 @@ private:
     float     m_cloudDensity = 0.5f;
     float     m_cloudScale = 0.85f;
     float     m_cloudSharpness = 0.6f;
-
+    bool      m_showcaseMode = false;
+    float m_weatherIntensity = 0.0f; // 0=晴天, 1=暴风
     UINT m_width = 0;
     UINT m_height = 0;
 };

@@ -218,142 +218,138 @@ float detailedClouds(float3 p, float scale, float time)
 // 像素着色器
 float4 skyPS(VSOutput input) : SV_Target
 {
-    // 归一化方向向量
     float3 normalizedPos = normalize(input.worldPos);
     
-    //调整地平线位置，将地平线降低
     float horizonAdjust = -0.15;
     float adjustedY = normalizedPos.y - horizonAdjust;
-    // 基于高度计算渐变，使用非线性插值
     float h = adjustedY * 0.5f + 0.5f;
     
-    // 使用平滑阶梯函数，不是线性插值
+    // 1. 天空渐变颜色
     float4 skyColor;
     if (h > 0.55f)
     {
-        // 顶部到中间渐变
         float t = smoothstep(0.55f, 1.0f, h);
         skyColor = lerp(middleColor, topColor, t);
     }
     else
     {
-        // 中间到底部渐变
         float t = smoothstep(0.0f, 0.55f, h);
         skyColor = lerp(bottomColor, middleColor, t);
     }
-    
-    // 添加太阳光晕效果
-    float3 sunDir = sunPosition.xyz; //已经是归一化方向
-    float sunDot = max(0.0f, dot(normalizedPos, sunDir));
-    float sunIntensity = pow(sunDot, 256.0f) * 2.0f;
-    
-    // 向最终颜色添加太阳光晕
-    skyColor.rgb += sunColor * sunIntensity * 2.0f;
-    
-    //月亮光晕效果
-    // 月亮光盘
-    float3 moonDir = moonPosition.xyz;
-    float moonDot = max(0.0f, dot(normalizedPos, moonDir));
-    float moonDisk = pow(moonDot, 2048.0f) * 3.0f;
-    float moonHalo = pow(moonDot, 64.0f) * 0.2f;
-    skyColor.rgb += float3(0.8f, 0.9f, 1.0f) * moonDisk;
-    skyColor.rgb += float3(0.4f, 0.5f, 0.8f) * moonHalo;
-    
-    // 夜晚星空背景（让天空不要太亮）
+
+    // 2. 夜晚天空变暗（先做，不影响后面的太阳月亮）
     float nightSky = saturate(-sunPosition.y * 3.0f);
     skyColor.rgb = lerp(skyColor.rgb, float3(0.02f, 0.02f, 0.08f), nightSky * 0.8f);
-    //高度计算 - 专注于下半球区域
+
+    // 3. 太阳光晕（在夜晚变暗之后叠加，不被压暗）
+    float3 sunDir = sunPosition.xyz;
+    float sunDot = max(0.0f, dot(normalizedPos, sunDir));
+    // 太阳光盘核心（明亮暖白）
+    float sunDisk = pow(sunDot, 2048.0f) * 8.0f;
+    skyColor.rgb += float3(1.0f, 0.95f, 0.8f) * sunDisk;
+
+    // 太阳光晕用 sunColor（日落时橙红）
+    float sunHalo = pow(sunDot, 256.0f) * 2.0f;
+    skyColor.rgb += sunColor * sunHalo;
+    // 4. 月牙（同样不被夜晚压暗影响）
+    float3 moonDir = moonPosition.xyz;
+    float moonDot = max(0.0f, dot(normalizedPos, moonDir));
+
+// 用世界空间 up 向量构建月亮切平面的固定切线
+    float3 up = float3(0.0f, 1.0f, 0.0f);
+    float3 tangent = normalize(up - dot(up, moonDir) * moonDir);
+    float3 bitangent = normalize(cross(moonDir, tangent));
+
+// 太阳在月亮切平面上的投影，得到月牙开口方向
+    float3 sunDir3 = sunPosition.xyz;
+    float tProj = dot(sunDir3, tangent);
+    float bProj = dot(sunDir3, bitangent);
+    float3 sunOnPlane = normalize(tangent * tProj + bitangent * bProj + float3(0, 0, 0.001));
+
+    // 太阳月亮夹角控制月相
+    float sunMoonAngle = dot(sunDir3, moonDir);
+    float phaseOffset = (sunMoonAngle + 1.0f) * 0.5f; // 0=新月, 1=满月
+    
+    float crescentAmount = 0.012f; // 固定中等月牙，不随太阳变化
+    float3 crescentDir = normalize(moonDir + sunOnPlane * crescentAmount);
+    float crescentDot = max(0.0f, dot(normalizedPos, crescentDir));
+
+    float moonBody = pow(moonDot, 1000.0f); // 控制月亮大小
+    float moonOcclude = pow(crescentDot, 1400.0f); // 控制遮挡圆大小
+    float moonCrescent = saturate(moonBody - moonOcclude * 2.0f); 
+    // 月牙颜色（确认形状正确后改成白色）
+    //skyColor.rgb += float3(1.0f, 1.0f, 0.95f) * moonCrescent * 8.0f;
+    skyColor.rgb += float3(1.0f, 0.0f, 0.0f) * moonCrescent * 8.0f;
+    
+    
+    // 光晕
+    float moonHalo = pow(moonDot, 100.0f) * 0.5f;
+    skyColor.rgb += float3(0.3f, 0.4f, 0.8f) * moonHalo;
+
+    // 5. 云
     float baseHeight = normalizedPos.y;
-    
-    // 高度掩码 - 在下半球分布云，扩大范围
-    float heightMask = smoothstep(-0.1, 0.3, baseHeight) 
-    * (1.0 - smoothstep(0.5, 0.8, baseHeight)); // 使用原始时间值，但应用正弦函数创造平滑循环，避免突变
     float baseTime = time;
-    
-    // 创建平滑变化的噪声参数 - 通过正弦函数而不是直接使用时间
-    float noiseParam1 = sin(baseTime * 0.05) * 0.5 + 0.5; // 0-1循环
-    float noiseParam2 = cos(baseTime * 0.04) * 0.5 + 0.5; // 0-1循环
-    
-    // 添加变化，增强云层分布的动态性，但使用平滑的正弦变化
-    heightMask = heightMask * (0.7 + 0.3 * sin(baseTime * 0.03));
-    
-    // 使用平滑变化的旋转参数
-    float rotFactor = sin(baseTime * 0.02) * 3.14159; // 平滑循环的旋转角度
+
+    float heightMask = smoothstep(-0.1, 0.3, baseHeight)
+        * (1.0 - smoothstep(0.5, 0.8, baseHeight));
+    heightMask *= (0.7 + 0.3 * sin(baseTime * 0.03));
+
+    float noiseParam1 = sin(baseTime * 0.05) * 0.5 + 0.5;
+    float noiseParam2 = cos(baseTime * 0.04) * 0.5 + 0.5;
+
+    float rotFactor = sin(baseTime * 0.02) * 3.14159;
     float3 rotatedNoisePos = float3(
         normalizedPos.x * cos(rotFactor) - normalizedPos.z * sin(rotFactor),
         normalizedPos.y,
-        normalizedPos.x * sin(rotFactor) + normalizedPos.z * cos(rotFactor)
-    );
-    
-    // 降低噪声频率，创造更大的云区域，使用平滑变化的参数
-    float3 noiseCoord = rotatedNoisePos * 2.0 + float3(noiseParam1, noiseParam2, noiseParam1 * noiseParam2);
+        normalizedPos.x * sin(rotFactor) + normalizedPos.z * cos(rotFactor));
+
+    float3 noiseCoord = rotatedNoisePos * 2.0
+        + float3(noiseParam1, noiseParam2, noiseParam1 * noiseParam2);
     float distributionNoise = improved_fbm(noiseCoord, 3);
-    
-    // 使用平滑变化的阈值
+
     float noiseThreshold = 0.3 + sin(baseTime * 0.02) * 0.05;
     distributionNoise = smoothstep(noiseThreshold, noiseThreshold + 0.3, distributionNoise);
-    
-    // 添加水平方向的额外噪声，但使用平滑变化参数
-    float hFreq = 1.5 + sin(baseTime * 0.01) * 0.3; // 平滑变化的频率
-    float horizontalNoise = (sin(normalizedPos.x * hFreq + noiseParam1 * 6.28) * 0.5 + 0.5) *
-                           (sin(normalizedPos.z * hFreq + noiseParam2 * 6.28) * 0.5 + 0.5);
-    
-    // 平滑变化的指数效果
-    float powerFactor = 1.1 + sin(baseTime * 0.015) * 0.1;
-    horizontalNoise = pow(horizontalNoise, powerFactor);
-    
-    // 平滑变化的云密度系数
+
+    float hFreq = 1.5 + sin(baseTime * 0.01) * 0.3;
+    float horizontalNoise =
+        (sin(normalizedPos.x * hFreq + noiseParam1 * 6.28) * 0.5 + 0.5) *
+        (sin(normalizedPos.z * hFreq + noiseParam2 * 6.28) * 0.5 + 0.5);
+    horizontalNoise = pow(horizontalNoise, 1.1 + sin(baseTime * 0.015) * 0.1);
+
     float densityFactor = 2.8 + sin(baseTime * 0.01) * 0.3;
-    
-     float stormCloudDensity = cloudDensity * (1.0f + weatherIntensity * 2.0f);
-    // 结合高度掩码和噪声，创建平滑变化的云分布
-    float cloudMask = heightMask * (distributionNoise * 0.7 + horizontalNoise * 0.3) * stormCloudDensity * densityFactor;
-    
-    // 创建多个云层 - 降低阈值，增加云的区域
-    if (cloudMask > 0.08) // 降低阈值，增加云的区域
+    float stormCloudDensity = cloudDensity * (1.0f + weatherIntensity * 2.0f);
+    float cloudMask = heightMask
+        * (distributionNoise * 0.7 + horizontalNoise * 0.3)
+        * stormCloudDensity * densityFactor;
+
+    if (cloudMask > 0.08)
     {
-        // 使用不同参数创建多层云 - 优化下半球的云层参数
-        // 第一层云 - 主要左右移动，减小缩放因子使云更大
         float cloudLayer1 = detailedClouds(normalizedPos, cloudScale * 0.6, time);
-        
-        // 第二层云 - 不同的偏移和移动速度，使用更小的缩放使云更大
         float cloudLayer2 = detailedClouds(normalizedPos * 1.1 + float3(4.0, -0.3, 1.0), cloudScale * 0.45, time * 0.75);
-        
-        // 第三层云 - 使用较小的偏移，增加覆盖度
         float cloudLayer3 = detailedClouds(normalizedPos * 1.5 + float3(-6.0, -0.4, 1.5), cloudScale * 0.35, time * 1.2);
-        
-        // 混合云层 - 增加各层的影响
+
         float cloudFactor = cloudLayer1 * 0.5 + cloudLayer2 * 0.35 + cloudLayer3 * 0.25;
         cloudFactor *= cloudMask;
         cloudFactor = min(cloudFactor, 0.85);
         cloudFactor = pow(cloudFactor, 1.1);
-        
-        // 云颜色 - 使用更自然的云颜色，底部稍微偏暗
-        float4 cloudColor = float4(1.0, 1.0, 1.0, 1.0);
-        
-        // 根据高度调整云颜色 - 下方云层略微偏灰
-        float heightFactor = smoothstep(-1.0, 0.0, baseHeight);
-        
-        // 暴风时云底变深灰
-        // 替换原来的 cloudColor 计算
-        float3 calmCloudBase = float3(0.75, 0.75, 0.82); // 云底更暗
-        float3 stormCloudBase = float3(0.25, 0.25, 0.30);
-        cloudColor.rgb = lerp(
-        lerp(calmCloudBase, float3(1.0, 1.0, 1.0), heightFactor),
-        stormCloudBase,
-        weatherIntensity);
 
-        // 加强太阳照射的明暗对比
-        float sunInfluence = pow(max(0.0, dot(normalizedPos, sunDir) * 0.5 + 0.5), 2.0);
-        
-        // 混合天空颜色和云颜色
+        float heightFactor = smoothstep(-1.0, 0.0, baseHeight);
+        float3 calmCloudBase = float3(0.75, 0.75, 0.82);
+        float3 stormCloudBase = float3(0.25, 0.25, 0.30);
+        float4 cloudColor;
+        cloudColor.rgb = lerp(
+            lerp(calmCloudBase, float3(1.0, 1.0, 1.0), heightFactor),
+            stormCloudBase, weatherIntensity);
+        cloudColor.a = 1.0;
+
+        // 夜晚云也变暗
+        cloudColor.rgb = lerp(cloudColor.rgb, cloudColor.rgb * 0.2f, nightSky);
+
         skyColor = lerp(skyColor, cloudColor, cloudFactor);
-        
-        // 添加太阳照射效果 - 使边缘发光
+
         float sunEdgeEffect = pow(sunDot, 8.0) * 0.5;
-        skyColor.rgb += float3(1.0, 0.8, 0.6) * cloudFactor * sunEdgeEffect;
+        skyColor.rgb += float3(1.0, 0.8, 0.6) * cloudFactor * sunEdgeEffect * (1.0 - nightSky);
     }
-    
+
     return skyColor;
-    
 }

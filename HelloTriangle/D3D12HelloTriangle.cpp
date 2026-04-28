@@ -370,6 +370,7 @@ void D3D12HelloTriangle::OnRender()
     m_commandList->ClearDepthStencilView(
         ctx.dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
+    m_skyDome->SetShowcaseMode(m_renderer->IsShowcaseMode());
     m_skyDome->Render(ctx);
 
     ID3D12DescriptorHeap* srvHeaps[] = { m_oceanFFT->GetSRVHeap() };
@@ -416,6 +417,8 @@ void D3D12HelloTriangle::OnRender()
     ThrowIfFailed(m_swapChain->Present(1, 0));
     WaitForPreviousFrame();
 }
+
+
 void D3D12HelloTriangle::OnDestroy()
 {
     // Ensure that the GPU is no longer referencing resources that are about to be

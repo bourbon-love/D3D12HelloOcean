@@ -168,36 +168,52 @@ void SkyDome::Update(float deltaTime)
 {
     m_time += deltaTime * 0.5f;
 
-    float angle = m_time * 0.3f; // 公转速度
+    float tilt = 0.5f;
 
-    // 太阳：水平圆形轨道，略微倾斜
-    float orbitRadius = 0.95f;   // 轨道半径（归一化方向向量）
-    float orbitHeight = 0.15f;   // 轨道高度，始终在地平线略上方
+    // 太阳轨道
+    float sunAngle = m_time * 0.3f;
+    m_sunDir.x = cosf(sunAngle);
+    m_sunDir.y = sinf(sunAngle) * tilt;
+    m_sunDir.z = sinf(sunAngle) * sqrtf(1.0f - tilt * tilt);
 
-    m_sunDir.x = cosf(angle) * orbitRadius;
-    m_sunDir.y = sinf(angle * 0.5f) * 0.4f; // Y方向小幅变化，模拟轨道倾斜
-    m_sunDir.z = sinf(angle) * orbitRadius;
-
-    // 归一化
-    float len = sqrtf(m_sunDir.x * m_sunDir.x +
+    float sunLen = sqrtf(m_sunDir.x * m_sunDir.x +
         m_sunDir.y * m_sunDir.y +
         m_sunDir.z * m_sunDir.z);
-    m_sunDir.x /= len;
-    m_sunDir.y /= len;
-    m_sunDir.z /= len;
+    m_sunDir.x /= sunLen;
+    m_sunDir.y /= sunLen;
+    m_sunDir.z /= sunLen;
 
-    // 月亮：太阳对面，角度差180度
-    m_moonDir.x = -m_sunDir.x;
-    m_moonDir.y = -m_sunDir.y * 0.5f + 0.2f; // 月亮轨道略有不同
-    m_moonDir.z = -m_sunDir.z;
+    // 月亮独立轨道，速度略慢，轨道平面略有倾斜
+    float moonAngle = m_time * 0.23f; // 比太阳慢，产生月相周期
+    float moonTilt = 0.4f;           // 轨道倾角略有不同
 
-    float moonLen = sqrtf(m_moonDir.x * m_moonDir.x +
-        m_moonDir.y * m_moonDir.y +
-        m_moonDir.z * m_moonDir.z);
-    m_moonDir.x /= moonLen;
-    m_moonDir.y /= moonLen;
-    m_moonDir.z /= moonLen;
-
+    // 太阳在天空时月亮沉入地平线
+    if (m_sunDir.y > 0.0f)
+    {
+        // 太阳在上，月亮强制沉下去
+        m_moonDir.x = -m_sunDir.x;
+        m_moonDir.y = -abs(m_sunDir.y) - 0.1f; // 强制为负，沉入地平线以下
+        m_moonDir.z = -m_sunDir.z;
+        float len = sqrtf(m_moonDir.x * m_moonDir.x +
+            m_moonDir.y * m_moonDir.y +
+            m_moonDir.z * m_moonDir.z);
+        m_moonDir.x /= len;
+        m_moonDir.y /= len;
+        m_moonDir.z /= len;
+    }
+    else
+    {
+        // 太阳落下，月亮升起
+        m_moonDir.x = -m_sunDir.x;
+        m_moonDir.y = abs(m_sunDir.y) + 0.1f; // 强制为正，升上地平线
+        m_moonDir.z = -m_sunDir.z;
+        float len = sqrtf(m_moonDir.x * m_moonDir.x +
+            m_moonDir.y * m_moonDir.y +
+            m_moonDir.z * m_moonDir.z);
+        m_moonDir.x /= len;
+        m_moonDir.y /= len;
+        m_moonDir.z /= len;
+    }
     // 云参数
     float cycle1 = sinf(m_time * 0.2f) * 0.5f + 0.5f;
     float cycle2 = cosf(m_time * 0.15f) * 0.5f + 0.5f;
@@ -205,19 +221,25 @@ void SkyDome::Update(float deltaTime)
     m_cloudScale = 0.85f + cycle2 * 0.15f;
     m_cloudSharpness = 0.6f + sinf(m_time * 0.1f) * 0.1f;
 }
+
 void SkyDome::Render(RenderContext& ctx)
 {
     // 从ctx里拿view/proj，天空球跟随摄像机（只用旋转，去掉平移）
     // 外部在构建ctx时需要传入view和proj矩阵
-    // 天空球缩放1000倍（和原来Scale=1000一致）
-    XMMATRIX scale = XMMatrixScaling(1000.0f, 1000.0f, 1000.0f);
-
+  
+    float skyScale = m_showcaseMode ? 400.0f : 1000.0f;
+    XMMATRIX scale = XMMatrixScaling(skyScale, skyScale, skyScale);
     // 注意：天空球要去掉平移分量，只保留旋转
     // 从view矩阵提取旋转部分（清除第四列的平移）
-    XMMATRIX viewNoTrans = ctx.view;
-    viewNoTrans.r[3] = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+    XMMATRIX viewForSky = ctx.view;
+    if (!m_showcaseMode) // 只有普通模式才去掉平移
+    {
+        viewForSky.r[3] = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+    }
 
-    XMMATRIX viewProj = scale * viewNoTrans * ctx.proj;
+    
+
+    XMMATRIX viewProj = scale * viewForSky * ctx.proj;
 
     // 更新CBV
     SkyCB cb;
@@ -264,20 +286,22 @@ float SkyDome::GetSunIntensity() const
     return baseIntensity * (1.0f - m_weatherIntensity * 0.8f);
 }
 
-// 根据太阳高度计算颜色：正午白色，日出日落橙红
 XMFLOAT3 SkyDome::GetSunColor() const
 {
-    float h = saturate(m_sunDir.y + 0.2f);
-    XMFLOAT3 nightColor = { 0.05f, 0.05f, 0.15f };
-    XMFLOAT3 dayColor = { 0.4f,  0.6f,  0.9f };
-    XMFLOAT3 stormColor = { 0.15f, 0.15f, 0.2f }; // 暴风灰色
+    float h = m_sunDir.y; // -1到1
+
+    // 日落偏橙红，正午偏白
+    float t = saturate(h);
+    XMFLOAT3 sunsetColor = { 1.0f, 0.4f, 0.1f }; // 日落橙红
+    XMFLOAT3 noonColor = { 1.0f, 0.95f, 0.8f }; // 正午暖白
 
     XMFLOAT3 baseColor = XMFLOAT3(
-        nightColor.x + (dayColor.x - nightColor.x) * h,
-        nightColor.y + (dayColor.y - nightColor.y) * h,
-        nightColor.z + (dayColor.z - nightColor.z) * h);
+        sunsetColor.x + (noonColor.x - sunsetColor.x) * t,
+        sunsetColor.y + (noonColor.y - sunsetColor.y) * t,
+        sunsetColor.z + (noonColor.z - sunsetColor.z) * t);
 
-    // 根据天气强度插值到暴风色
+    // 暴风时颜色变灰
+    XMFLOAT3 stormColor = { 0.6f, 0.6f, 0.65f };
     return XMFLOAT3(
         baseColor.x + (stormColor.x - baseColor.x) * m_weatherIntensity,
         baseColor.y + (stormColor.y - baseColor.y) * m_weatherIntensity,

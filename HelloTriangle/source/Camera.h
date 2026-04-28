@@ -21,7 +21,7 @@ struct Camera
 	// 展示模式相关参数
     bool  m_showcaseMode = false;  // 展示模式开关
     float m_showcaseAngle = 0.0f;  // 自动旋转角度
-    float m_showcaseRadius = 700.0f; // 环绕半径
+    float m_showcaseRadius = 1000.0f; // 环绕半径
     float m_showcaseHeight = 200.0f; // 环绕高度
 
     XMMATRIX GetViewMatrix() const;

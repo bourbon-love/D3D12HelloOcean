@@ -169,22 +169,22 @@ void Renderer::Update(float deltaTime)
 
         // 根据太阳高度在日光和月光之间插值
         float sunY = m_skyDome->GetSunDirection().y;
-        float moonBlend = saturate(-sunY * 3.0f); // 太阳越低月亮越强
-
-        float sunIntensity = m_skyDome->GetSunIntensity();
-        float moonIntensity = m_skyDome->GetMoonIntensity();
-        cb.sunIntensity = std::lerp(sunIntensity, moonIntensity, moonBlend);
-
-        XMFLOAT3 moonColor = m_skyDome->GetMoonColor();
-        XMFLOAT3 sunColor = cb.sunColor;
-        cb.sunColor = XMFLOAT3(
-            std::lerp(sunColor.x, moonColor.x, moonBlend),
-            std::lerp(sunColor.y, moonColor.y, moonBlend),
-            std::lerp(sunColor.z, moonColor.z, moonBlend));
-
-        // 夜晚光照方向切换到月亮
-        if (sunY < 0.0f)
+        if (sunY >= 0.0f)
+        {
+            // 白天用太阳
+            cb.sunDir = m_skyDome->GetSunDirection();
+            cb.sunIntensity = m_skyDome->GetSunIntensity();
+            cb.sunColor = m_skyDome->GetSunColor();
+        }
+        else
+        {
+            // 夜晚用月亮
             cb.sunDir = m_skyDome->GetMoonDirection();
+            cb.sunIntensity = m_skyDome->GetMoonIntensity();
+            cb.sunColor = m_skyDome->GetMoonColor();
+        }
+
+      
 
         // 雾气
         if (m_showcaseMode)
