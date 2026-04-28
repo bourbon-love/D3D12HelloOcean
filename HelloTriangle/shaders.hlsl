@@ -154,6 +154,43 @@ VSOutput VSMain(VSInput vin)
     return vout;
 
 }
+// Reconstruct sky color from a reflection direction, matching the dynamic sky palette
+float3 SampleSkyReflection(float3 reflDir)
+{
+    // Elevation: 0 = horizon, 1 = zenith
+    float h = saturate(reflDir.y);
+
+    // Day/night factor from sun height
+    float dayF  = saturate(sunDir.y * 4.0 + 0.4);
+    // Sunset factor: peaks when sun is near horizon
+    float sunsetF = saturate(1.0 - abs(sunDir.y) * 5.0);
+    sunsetF = sunsetF * sunsetF;
+
+    // Zenith / horizon for night and day
+    float3 zenithDay  = float3(0.08, 0.25, 0.72);
+    float3 horizDay   = skyColor * 1.5;
+    float3 zenithNight = float3(0.01, 0.01, 0.06);
+    float3 horizNight  = float3(0.03, 0.03, 0.12);
+
+    float3 zenith = lerp(zenithNight, zenithDay,  dayF);
+    float3 horiz  = lerp(horizNight,  horizDay,   dayF);
+    float3 sky    = lerp(horiz, zenith, h);
+
+    // Sunset overlay: orange-gold near horizon
+    float3 sunsetHorizon = float3(1.6, 0.72, 0.12); // HDR gold
+    float3 sunsetZenith  = float3(0.10, 0.16, 0.48); // blue-purple
+    float3 sunsetCol = lerp(sunsetZenith, sunsetHorizon, saturate(1.2 - h * 3.0));
+    sky = lerp(sky, sunsetCol, sunsetF * saturate(1.2 - h * 2.0));
+
+    // Sun glow in the reflected direction
+    float sunDotR = max(0.0, dot(reflDir, sunDir));
+    sky += sunColor * pow(sunDotR, 6.0) * 4.0;
+
+    // Below horizon: fade to deep water color
+    float3 deepWater = float3(0.02, 0.06, 0.15);
+    return lerp(deepWater, sky, smoothstep(-0.05, 0.1, reflDir.y));
+}
+
 float4 PSMain(VSOutput pin) : SV_TARGET
 {
     // 逐像素从 heightMap 重新算法线（和 VS 用同一个 scale）
@@ -229,16 +266,17 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     float3 diffuse = waterColor * (NdotL * 0.5f * sunIntensity + 0.5f);
     diffuse *= sunColor;
 
-    // Blinn-Phong specular
+    // Blinn-Phong specular (HDR — intentionally exceeds 1.0 for bloom)
     float NdotH = saturate(dot(N, H));
     float specular = pow(NdotH, 128.0f);
-    float3 specularColor = sunColor * specular * sunIntensity * 2.0f;
+    float3 specularColor = sunColor * specular * sunIntensity * 15.0f;
 
-    // Fresnel
+    // Fresnel with full dynamic sky reflection
     float F0 = 0.02f;
     float NdotV = saturate(dot(N, V));
     float fresnel = F0 + (1.0f - F0) * pow(1.0f - NdotV, 5.0f);
-    float3 reflectColor = skyColor * fresnel;
+    float3 reflectDir = reflect(-V, N);
+    float3 reflectColor = SampleSkyReflection(reflectDir) * fresnel * 2.0;
 
     float3 color = diffuse + specularColor + reflectColor;
 
@@ -253,7 +291,7 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     float foam = 1.0f - saturate(J);
     foam = pow(foam, 2.0f);
 
-    float3 foamColor = float3(1.0f, 1.0f, 1.0f);
+    float3 foamColor = float3(2.5f, 2.5f, 2.5f); // HDR white — blooms on wave crests
     color = lerp(color, foamColor, foam * 0.8f);
     return float4(color, 1.0f);
 }

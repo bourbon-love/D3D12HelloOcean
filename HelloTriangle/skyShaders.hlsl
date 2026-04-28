@@ -20,6 +20,8 @@
     float moonOccludePow;
     float crescentOffsetAmt;
     float padMoonParams;
+    float lightningIntensity;
+    float3 padLightning;
 };
 
 struct VSInput
@@ -221,6 +223,42 @@ float detailedClouds(float3 p, float scale, float time)
     return cloud;
 }
 
+float3 renderStars(float3 dir, float time, float nightFactor)
+{
+    // Fade out near and below horizon
+    float horizonMask = smoothstep(0.0, 0.2, dir.y);
+
+    // Partition sky into small cells; each cell may contain one star
+    float3 p = dir * 150.0;
+    float3 cellId = floor(p);
+    float3 cellFrac = frac(p);
+
+    float h = hash(cellId);
+    if (h < 0.94) return float3(0, 0, 0); // ~6% of cells have a star
+
+    // Sub-cell position of the star
+    float3 starOffset = float3(
+        hash(cellId + float3(1.3, 7.7, 2.5)),
+        hash(cellId + float3(9.1, 4.3, 6.7)),
+        hash(cellId + float3(3.7, 11.1, 8.3))
+    );
+
+    float dist = length(cellFrac - starOffset);
+    float core = 1.0 - smoothstep(0.0, 0.12, dist);
+
+    // Magnitude: brighter cells (h closer to 1) produce brighter stars
+    float mag = (h - 0.94) / 0.06;
+
+    // Twinkle: each star gets its own phase and frequency
+    float twinkle = 0.7 + 0.3 * sin(time * (1.5 + h * 6.0) + h * 57.3);
+
+    // Color: blueish-white for hot stars, warm-white for cool stars
+    float colorVar = hash(cellId + float3(5.5, 3.3, 9.9));
+    float3 starColor = lerp(float3(0.7, 0.85, 1.0), float3(1.0, 0.95, 0.8), colorVar);
+
+    return starColor * core * mag * twinkle * nightFactor * horizonMask * 5.0;
+}
+
 // 像素着色器
 float4 skyPS(VSOutput input) : SV_Target
 {
@@ -247,16 +285,28 @@ float4 skyPS(VSOutput input) : SV_Target
     float nightSky = saturate(-sunPosition.y * 3.0f);
     skyColor.rgb = lerp(skyColor.rgb, float3(0.02f, 0.02f, 0.08f), nightSky * 0.8f);
 
+    // 2b. 星星（夜晚逐渐显现，云层会在后续步骤自然遮盖）
+    skyColor.rgb += renderStars(normalizedPos, time, nightSky);
+
+    // 2c. 闪电：天空瞬间变蓝白，带轻微高频闪烁
+    float flicker = lightningIntensity * (0.8 + 0.2 * sin(time * 50.0));
+    skyColor.rgb += float3(0.85, 0.92, 1.0) * flicker * 3.0;
+
     // 3. 太阳光晕（在夜晚变暗之后叠加，不被压暗）
     float3 sunDir = sunPosition.xyz;
     float sunDot = max(0.0f, dot(normalizedPos, sunDir));
-    // 太阳光盘核心（明亮暖白）
-    float sunDisk = pow(sunDot, 2048.0f) * 8.0f;
+    // 太阳光盘核心（HDR 高亮，ACES 会压缩）
+    float sunDisk = pow(sunDot, 2048.0f) * 20.0f;
     skyColor.rgb += float3(1.0f, 0.95f, 0.8f) * sunDisk;
 
-    // 太阳光晕用 sunColor（日落时橙红）
-    float sunHalo = pow(sunDot, 256.0f) * 2.0f;
+    // 太阳光晕
+    float sunHalo = pow(sunDot, 256.0f) * 5.0f;
     skyColor.rgb += sunColor * sunHalo;
+
+    // Atmospheric scattering: wide orange-red glow when sun is near horizon
+    float sunNearHorizon = saturate(1.0f - abs(sunPosition.y) * 5.0f);
+    float atmScatter = pow(sunDot, 4.0f) * sunNearHorizon * 2.5f;
+    skyColor.rgb += float3(1.1f, 0.42f, 0.04f) * atmScatter;
     // 4. 月牙（同样不被夜晚压暗影响）
     float3 moonDir = moonPosition.xyz;
     float moonDot = max(0.0f, dot(normalizedPos, moonDir));
@@ -268,11 +318,10 @@ float4 skyPS(VSOutput input) : SV_Target
     float moonBody    = pow(moonDot,    moonBodyPow);
     float moonOcclude = pow(crescentDot, moonOccludePow);
     float moonCrescent = saturate(moonBody - moonOcclude * 2.0f);
-    skyColor.rgb += float3(1.0f, 1.0f, 0.95f) * moonCrescent * 8.0f;
-    
-    
+    skyColor.rgb += float3(1.0f, 1.0f, 0.95f) * moonCrescent * 18.0f;
+
     // 光晕
-    float moonHalo = pow(moonDot, 100.0f) * 0.5f;
+    float moonHalo = pow(moonDot, 100.0f) * 1.2f;
     skyColor.rgb += float3(0.3f, 0.4f, 0.8f) * moonHalo;
 
     // 5. 云
@@ -333,6 +382,13 @@ float4 skyPS(VSOutput input) : SV_Target
 
         // 夜晚云也变暗
         cloudColor.rgb = lerp(cloudColor.rgb, cloudColor.rgb * 0.2f, nightSky);
+
+        // 日落/日出时云朵染成橙粉色
+        float sunsetCloud = saturate(1.0f - abs(sunPosition.y) * 5.0f);
+        cloudColor.rgb = lerp(cloudColor.rgb, float3(1.3f, 0.55f, 0.22f), sunsetCloud * 0.55f);
+
+        // 闪电从云层内部照亮
+        cloudColor.rgb = lerp(cloudColor.rgb, float3(0.88, 0.92, 1.0), lightningIntensity * 0.7);
 
         skyColor = lerp(skyColor, cloudColor, cloudFactor);
 
