@@ -8,10 +8,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 构建方法
 
-用 Visual Studio 2022 打开 `D3D12HelloWorld.sln`，选择 `HelloTriangle` 项目，配置 x64 Debug 或 Release 后构建。也可以直接用 MSBuild：
+用 Visual Studio 2022 打开 `D3D12HelloWorld.sln`，选择 `HelloTriangle` 项目，配置 x64 Debug 或 Release 后构建。
 
+命令行构建（使用本机 VS2022 Enterprise MSBuild）：
+
+```powershell
+& "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\MSBuild\Current\Bin\MSBuild.exe" D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal
 ```
-msbuild D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64
+
+运行：
+
+```powershell
+Start-Process "HelloTriangle\bin\x64\Debug\D3D12HelloOcean.exe"
 ```
 
 输出目录为 `HelloTriangle/bin/x64/Debug/` 或 `Release/`。项目无自动化测试。
