@@ -52,6 +52,7 @@ public:
 	// 供SkyDome读取太阳和天空参数
     void SetSkyDome(SkyDome* skyDome) { m_skyDome = skyDome; }
     void SetWeatherSystem(WeatherSystem* ws) { m_weatherSystem = ws; }
+    void SetSSRMix(float v) { m_ssrMix = v; }
     XMMATRIX GetViewMatrix() const
     {
         return m_camera.GetViewMatrix();
@@ -86,9 +87,10 @@ public:
         float             padSun;
         XMFLOAT3 skyColor;
         float             padSky;
-        float fogStart;   // 雾开始距离
-        float fogEnd;     // 雾结束距离
-        XMFLOAT2 padFog;
+        float fogStart;
+        float fogEnd;
+        float foamIntensity;
+        float ssrMix;
         WaveParam waves[4];
 
     };
@@ -108,6 +110,7 @@ private:
     UINT8* m_pCbvDataBegin;
     bool  m_wireframe = false;
     bool  m_showcaseMode = false;
+    float m_ssrMix = 1.0f;
 
 	float m_time = 0.0f;
 
