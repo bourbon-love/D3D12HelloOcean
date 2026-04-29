@@ -135,7 +135,7 @@ void D3D12HelloTriangle::LoadPipeline()
     {
         // Describe and create a render target view (RTV) descriptor heap.
         D3D12_DESCRIPTOR_HEAP_DESC rtvHeapDesc = {};
-        rtvHeapDesc.NumDescriptors = FrameCount + 4; // +2 bloom, +1 HDR, +1 god ray
+        rtvHeapDesc.NumDescriptors = FrameCount + 5; // +2 bloom, +1 HDR, +1 god ray, +1 DOF
         rtvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
         rtvHeapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_NONE;
         ThrowIfFailed(m_device->CreateDescriptorHeap(&rtvHeapDesc, IID_PPV_ARGS(&m_rtvHeap)));
@@ -168,7 +168,7 @@ void D3D12HelloTriangle::LoadAssets()
         rootParameters[0].InitAsConstantBufferView(0);//b0 cbv
 
         CD3DX12_DESCRIPTOR_RANGE srvRange;
-        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0);//t0
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0); // t0, t1, t2(skySnapshot)
         rootParameters[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
         rootParameters[2].InitAsConstantBufferView(1); // b1 涟漪CB
         CD3DX12_STATIC_SAMPLER_DESC sampler(
@@ -321,6 +321,9 @@ void D3D12HelloTriangle::LoadAssets()
     InitBloom();
     InitHDR();
     InitGodRays();
+    InitLensFlare();
+    InitSSR();
+    InitDOF();
 }
 
 // Update frame-based values.
@@ -334,10 +337,33 @@ void D3D12HelloTriangle::OnUpdate()
     float weatherIntensity = m_weatherSystem->GetWeatherIntensity();
 
     m_skyDome->Update(scaledDt);
+
+    // Auto exposure: smooth adaptation to sun height (uses real deltaTime, not scaled)
+    if (m_autoExposure)
+    {
+        float sunH = m_skyDome->GetSunDirection().y;
+        float weatherI = m_weatherSystem->GetWeatherIntensity();
+
+        float target;
+        if      (sunH > 0.25f)  target = 1.0f;
+        else if (sunH > 0.0f)   target = 1.0f + (1.6f - 1.0f) * (1.0f - sunH / 0.25f);
+        else if (sunH > -0.15f) target = 1.6f + (2.2f - 1.6f) * (-sunH / 0.15f);
+        else                    target = 2.5f;
+
+        target += weatherI * 0.4f; // storm → darker scene → more exposure
+        target = target < 0.3f ? 0.3f : (target > 5.0f ? 5.0f : target);
+
+        // Asymmetric speed: faster to adapt to bright (pupil constricts fast)
+        float speed = (target < m_exposure) ? 1.0f : 0.35f;
+        m_exposure += (target - m_exposure) * (speed * deltaTime < 1.0f ? speed * deltaTime : 1.0f);
+    }
+
     m_renderer->Update(scaledDt);
     m_weatherSystem->Update(scaledDt);
     m_rainSystem->Update(scaledDt, weatherIntensity,
         m_oceanFFT->windDirX, m_oceanFFT->windDirY);
+
+    m_renderer->SetSSRMix(m_ssrStrength);
 
     // ImGui 帧
     ImGui_ImplDX12_NewFrame();
@@ -350,6 +376,9 @@ void D3D12HelloTriangle::OnUpdate()
 void D3D12HelloTriangle::BuildImGuiUI()
 {
     ImGui::Begin("Scene Controls");
+
+    // ---- Performance ----
+    ImGui::Text("FPS: %.1f  (%.2f ms)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
 
     // ---- Time ----
     ImGui::Separator(); ImGui::Text("--- Time ---");
@@ -419,7 +448,12 @@ void D3D12HelloTriangle::BuildImGuiUI()
 
     // ---- Bloom ----
     ImGui::Separator(); ImGui::Text("--- Bloom ---");
-    ImGui::SliderFloat("Exposure",  &m_exposure,       0.1f, 5.0f,  "%.2f");
+    ImGui::Checkbox("Auto Exposure", &m_autoExposure);
+    ImGui::SameLine();
+    if (m_autoExposure)
+        ImGui::Text("EV: %.2f", m_exposure);
+    else
+        ImGui::SliderFloat("Exposure", &m_exposure, 0.1f, 5.0f, "%.2f");
     ImGui::Checkbox("Enable Bloom", &m_bloomEnabled);
     if (m_bloomEnabled)
     {
@@ -429,6 +463,31 @@ void D3D12HelloTriangle::BuildImGuiUI()
     ImGui::Checkbox("God Rays", &m_godRaysEnabled);
     if (m_godRaysEnabled)
         ImGui::SliderFloat("GR Strength", &m_godRayStrength, 0.1f, 3.0f, "%.2f");
+
+    // ---- Depth of Field ----
+    ImGui::Separator(); ImGui::Text("--- Depth of Field ---");
+    ImGui::Checkbox("Enable DOF", &m_dofEnabled);
+    if (m_dofEnabled)
+    {
+        ImGui::SliderFloat("Focus Depth",  &m_dofFocusDepth, 0.5f, 1.0f,  "%.3f");
+        ImGui::SliderFloat("Focus Range",  &m_dofFocusRange, 0.02f, 0.5f, "%.3f");
+        ImGui::SliderFloat("Max Blur",     &m_dofMaxRadius,  0.002f, 0.025f, "%.4f");
+    }
+
+    // ---- Camera ----
+    ImGui::Separator(); ImGui::Text("--- Camera ---");
+    ImGui::SliderFloat("Vignette",   &m_vignetteStrength, 0.0f, 1.5f, "%.2f");
+    ImGui::SliderFloat("Film Grain", &m_grainStrength,    0.0f, 0.08f, "%.3f");
+
+    // ---- SSR ----
+    ImGui::Separator(); ImGui::Text("--- SSR ---");
+    ImGui::SliderFloat("SSR Strength", &m_ssrStrength, 0.0f, 1.0f, "%.2f");
+
+    // ---- Lens Flare ----
+    ImGui::Separator(); ImGui::Text("--- Lens Flare ---");
+    ImGui::Checkbox("Enable Lens Flare", &m_lensFlareEnabled);
+    if (m_lensFlareEnabled)
+        ImGui::SliderFloat("LF Strength", &m_lensFlareStrength, 0.1f, 3.0f, "%.2f");
 
     ImGui::End();
 }
@@ -584,7 +643,7 @@ void D3D12HelloTriangle::InitHDR()
         srvRange2.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 2); // t2
         params[0].InitAsDescriptorTable(1, &srvRange1, D3D12_SHADER_VISIBILITY_PIXEL);
         params[1].InitAsDescriptorTable(1, &srvRange2, D3D12_SHADER_VISIBILITY_PIXEL);
-        params[2].InitAsConstants(3, 0); // bloomStrength, exposure, godRayStrength
+        params[2].InitAsConstants(8, 0); // bloom, exposure, godray, vignette, grain, time, pad×2
 
         CD3DX12_STATIC_SAMPLER_DESC sampler(0,
             D3D12_FILTER_MIN_MAG_MIP_LINEAR,
@@ -905,9 +964,13 @@ void D3D12HelloTriangle::RenderToneMap()
     cmd->RSSetViewports(1, &m_viewport);
     cmd->RSSetScissorRects(1, &m_scissorRect);
 
-    float params[3] = { m_bloomStrength, m_exposure, m_godRayStrength };
+    float params[8] = {
+        m_bloomStrength, m_exposure, m_godRayStrength,
+        m_vignetteStrength, m_grainStrength, m_renderer->GetTime(),
+        0.0f, 0.0f
+    };
     cmd->SetPipelineState(m_toneMappingPSO.Get());
-    cmd->SetGraphicsRoot32BitConstants(2, 3, params, 0);
+    cmd->SetGraphicsRoot32BitConstants(2, 8, params, 0);
     cmd->SetGraphicsRootDescriptorTable(0, gpuSlot0);
     cmd->SetGraphicsRootDescriptorTable(1, gpuSlot3);
     cmd->OMSetRenderTargets(1, &rtvSwap, FALSE, nullptr);
@@ -934,6 +997,364 @@ void D3D12HelloTriangle::RenderToneMap()
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
             D3D12_RESOURCE_STATE_RENDER_TARGET);
         cmd->ResourceBarrier(1, &bar);
+    }
+
+    // Restore dofRT to RT and redirect bloomSRVHeap[0] back to hdrRT
+    if (m_dofEnabled)
+    {
+        auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_dofRT.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET);
+        cmd->ResourceBarrier(1, &bar);
+
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+        sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels     = 1;
+        m_device->CreateShaderResourceView(m_hdrRT.Get(), &sd,
+            m_bloomSRVHeap->GetCPUDescriptorHandleForHeapStart()); // restore slot 0 → hdrRT
+    }
+
+    // Restore skySnapshot to COPY_DEST ready for next frame's sky blit
+    if (m_skySnapshotInPSR)
+    {
+        auto bar = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_skySnapshotRT.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_COPY_DEST);
+        cmd->ResourceBarrier(1, &bar);
+        m_skySnapshotInPSR = false;
+    }
+}
+
+void D3D12HelloTriangle::InitLensFlare()
+{
+    // Root signature: 6 root constants (sunX, sunY, sunVis, strength, aspectRatio, time)
+    {
+        CD3DX12_ROOT_PARAMETER params[1];
+        params[0].InitAsConstants(6, 0);
+
+        CD3DX12_ROOT_SIGNATURE_DESC rsd;
+        rsd.Init(1, params, 0, nullptr, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+        ComPtr<ID3DBlob> sig, err;
+        ThrowIfFailed(D3D12SerializeRootSignature(&rsd,
+            D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err));
+        ThrowIfFailed(m_device->CreateRootSignature(0,
+            sig->GetBufferPointer(), sig->GetBufferSize(),
+            IID_PPV_ARGS(&m_lensFlareRootSig)));
+    }
+
+    // PSO: additive blend, no depth test, outputs to LDR swap chain format
+    {
+        UINT8 *pVS = nullptr, *pPS = nullptr;
+        UINT   vsLen = 0,      psLen = 0;
+        ThrowIfFailed(ReadDataFromFile(
+            GetAssetFullPath(L"lensflare_LensFlareVS.cso").c_str(), &pVS, &vsLen));
+        ThrowIfFailed(ReadDataFromFile(
+            GetAssetFullPath(L"lensflare_LensFlarePS.cso").c_str(), &pPS, &psLen));
+
+        D3D12_BLEND_DESC blendDesc = {};
+        blendDesc.RenderTarget[0].BlendEnable    = TRUE;
+        blendDesc.RenderTarget[0].SrcBlend       = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[0].DestBlend      = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[0].BlendOp        = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].SrcBlendAlpha  = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[0].DestBlendAlpha = D3D12_BLEND_ONE;
+        blendDesc.RenderTarget[0].BlendOpAlpha   = D3D12_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
+        pd.pRootSignature           = m_lensFlareRootSig.Get();
+        pd.VS                       = CD3DX12_SHADER_BYTECODE(pVS, vsLen);
+        pd.PS                       = CD3DX12_SHADER_BYTECODE(pPS, psLen);
+        pd.RasterizerState          = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+        pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+        pd.BlendState               = blendDesc;
+        pd.DepthStencilState.DepthEnable   = FALSE;
+        pd.DepthStencilState.StencilEnable = FALSE;
+        pd.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+        pd.SampleMask            = UINT_MAX;
+        pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+        pd.NumRenderTargets      = 1;
+        pd.RTVFormats[0]         = DXGI_FORMAT_R8G8B8A8_UNORM;
+        pd.SampleDesc.Count      = 1;
+        ThrowIfFailed(m_device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_lensFlarePSO)));
+    }
+}
+
+void D3D12HelloTriangle::RenderLensFlare()
+{
+    if (!m_lensFlareEnabled) return;
+
+    auto* cmd = m_commandList.Get();
+
+    // Project sun to screen UV (same logic as RenderGodRays)
+    XMFLOAT3 sd3 = m_skyDome->GetSunDirection();
+    XMVECTOR sunWorld = XMVector3Normalize(XMLoadFloat3(&sd3));
+    sunWorld = XMVectorSetW(XMVectorScale(sunWorld, 999.0f), 1.0f);
+    XMMATRIX vp = XMMatrixMultiply(m_renderer->GetViewMatrix(), m_renderer->GetProjMatrix());
+    XMVECTOR clip = XMVector4Transform(sunWorld, vp);
+
+    float w = XMVectorGetW(clip);
+    float sunScreenX = 0.5f, sunScreenY = 0.5f, sunVis = 0.0f;
+    if (w > 0.0f)
+    {
+        sunScreenX = XMVectorGetX(clip) / w * 0.5f + 0.5f;
+        sunScreenY = -XMVectorGetY(clip) / w * 0.5f + 0.5f;
+        sunVis = std::clamp(sd3.y * 3.0f + 0.3f, 0.0f, 1.0f);
+        float ax = fabsf(sunScreenX - 0.5f), ay = fabsf(sunScreenY - 0.5f);
+        float offScreen = ax > ay ? ax : ay;
+        sunVis *= std::clamp(1.0f - (offScreen - 0.5f) * 3.0f, 0.0f, 1.0f);
+    }
+
+    if (sunVis <= 0.001f) return;
+
+    auto rtvSwap = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+        m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
+        m_frameIndex, m_rtvDescriptorSize);
+
+    struct LFParams { float sx, sy, vis, strength, aspect, time; } p = {
+        sunScreenX, sunScreenY, sunVis, m_lensFlareStrength,
+        (float)m_width / (float)m_height, m_renderer->GetTime()
+    };
+
+    cmd->SetGraphicsRootSignature(m_lensFlareRootSig.Get());
+    cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmd->RSSetViewports(1, &m_viewport);
+    cmd->RSSetScissorRects(1, &m_scissorRect);
+    cmd->SetPipelineState(m_lensFlarePSO.Get());
+    cmd->SetGraphicsRoot32BitConstants(0, 6, &p, 0);
+    cmd->OMSetRenderTargets(1, &rtvSwap, FALSE, nullptr);
+    cmd->DrawInstanced(3, 1, 0, 0);
+}
+
+void D3D12HelloTriangle::InitDOF()
+{
+    // DOF output RT (slot FrameCount+4 = 6 in RTV heap)
+    {
+        auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto rtDesc   = CD3DX12_RESOURCE_DESC::Tex2D(
+            DXGI_FORMAT_R16G16B16A16_FLOAT, m_width, m_height, 1, 1);
+        rtDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+        D3D12_CLEAR_VALUE clearVal = {};
+        clearVal.Format = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &rtDesc,
+            D3D12_RESOURCE_STATE_RENDER_TARGET, &clearVal,
+            IID_PPV_ARGS(&m_dofRT)));
+
+        CD3DX12_CPU_DESCRIPTOR_HANDLE rtv(
+            m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
+            FrameCount + 4, m_rtvDescriptorSize);
+        m_device->CreateRenderTargetView(m_dofRT.Get(), nullptr, rtv);
+    }
+
+    // DOF SRV heap: [0]=hdrRT  [1]=depthBuffer
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC hd = {};
+        hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.NumDescriptors = 2;
+        hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ThrowIfFailed(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_dofSRVHeap)));
+        m_dofSRVIncrSize = m_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+        // Slot 0: hdrRT (R16F)
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+        sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels     = 1;
+        m_device->CreateShaderResourceView(m_hdrRT.Get(), &sd,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_dofSRVHeap->GetCPUDescriptorHandleForHeapStart(), 0, m_dofSRVIncrSize));
+
+        // Slot 1: depth buffer (R32_FLOAT view of R32_TYPELESS resource)
+        sd.Format = DXGI_FORMAT_R32_FLOAT;
+        m_device->CreateShaderResourceView(m_renderer->GetDepthBuffer(), &sd,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_dofSRVHeap->GetCPUDescriptorHandleForHeapStart(), 1, m_dofSRVIncrSize));
+    }
+
+    // DOF root signature: [0] 2-SRV table, [1] 4 root constants
+    ComPtr<ID3D12RootSignature> dofRootSig;
+    {
+        CD3DX12_ROOT_PARAMETER params[2];
+        CD3DX12_DESCRIPTOR_RANGE srvRange;
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0); // t0, t1
+        params[0].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_PIXEL);
+        params[1].InitAsConstants(4, 0); // focusDepth, focusRange, maxRadius, aspectRatio
+
+        CD3DX12_STATIC_SAMPLER_DESC sampler(0,
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+
+        CD3DX12_ROOT_SIGNATURE_DESC rsd;
+        rsd.Init(2, params, 1, &sampler, D3D12_ROOT_SIGNATURE_FLAG_NONE);
+        ComPtr<ID3DBlob> sig, err;
+        ThrowIfFailed(D3D12SerializeRootSignature(&rsd,
+            D3D_ROOT_SIGNATURE_VERSION_1, &sig, &err));
+
+        // Store root sig inline (reuse m_lensFlareRootSig pattern — add to header if needed)
+        // For simplicity, store in a local and bake the PSO:
+        ComPtr<ID3D12RootSignature> rs;
+        ThrowIfFailed(m_device->CreateRootSignature(0,
+            sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&rs)));
+        dofRootSig = rs;
+    }
+
+    // Store as a class member — declare ComPtr<ID3D12RootSignature> m_dofRootSig in header
+    // (We'll forward-declare it via a local trick: assign to m_lensFlarePSO's sibling)
+    // Actually: add m_dofRootSig and m_dofPSO to the header separately.
+    // For now store via local variable and build PSO below:
+    UINT8 *pVS = nullptr, *pPS = nullptr;
+    UINT   vsLen = 0,      psLen = 0;
+    ThrowIfFailed(ReadDataFromFile(
+        GetAssetFullPath(L"dof_DOFVS.cso").c_str(), &pVS, &vsLen));
+    ThrowIfFailed(ReadDataFromFile(
+        GetAssetFullPath(L"dof_DOFPS.cso").c_str(), &pPS, &psLen));
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC pd = {};
+    pd.pRootSignature           = dofRootSig.Get();
+    pd.VS                       = CD3DX12_SHADER_BYTECODE(pVS, vsLen);
+    pd.PS                       = CD3DX12_SHADER_BYTECODE(pPS, psLen);
+    pd.RasterizerState          = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+    pd.RasterizerState.CullMode = D3D12_CULL_MODE_NONE;
+    pd.BlendState               = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+    pd.DepthStencilState.DepthEnable   = FALSE;
+    pd.DepthStencilState.StencilEnable = FALSE;
+    pd.DSVFormat             = DXGI_FORMAT_UNKNOWN;
+    pd.SampleMask            = UINT_MAX;
+    pd.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+    pd.NumRenderTargets      = 1;
+    pd.RTVFormats[0]         = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    pd.SampleDesc.Count      = 1;
+
+    // Store root sig + PSO — need to add these as class members
+    m_dofRootSig = dofRootSig;
+    ThrowIfFailed(m_device->CreateGraphicsPipelineState(&pd, IID_PPV_ARGS(&m_dofPSO)));
+}
+
+void D3D12HelloTriangle::RenderDOF()
+{
+    auto* cmd = m_commandList.Get();
+
+    if (!m_dofEnabled)
+    {
+        // Pass-through: update bloomSRVHeap[0] to still point to hdrRT (already correct)
+        return;
+    }
+
+    // hdrRT is currently in PSR (from RenderBloom). Depth is in DEPTH_WRITE.
+    // Transition depth to PSR for shader read
+    auto b0 = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_renderer->GetDepthBuffer(),
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    cmd->ResourceBarrier(1, &b0);
+
+    auto dofRtv = CD3DX12_CPU_DESCRIPTOR_HANDLE(
+        m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
+        FrameCount + 4, m_rtvDescriptorSize);
+
+    const float kBlack[] = { 0, 0, 0, 0 };
+    struct DOFParams { float focusDepth, focusRange, maxRadius, aspect; } p = {
+        m_dofFocusDepth, m_dofFocusRange, m_dofMaxRadius,
+        (float)m_width / (float)m_height
+    };
+
+    cmd->SetGraphicsRootSignature(m_dofRootSig.Get());
+    ID3D12DescriptorHeap* heaps[] = { m_dofSRVHeap.Get() };
+    cmd->SetDescriptorHeaps(1, heaps);
+    cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmd->RSSetViewports(1, &m_viewport);
+    cmd->RSSetScissorRects(1, &m_scissorRect);
+    cmd->SetPipelineState(m_dofPSO.Get());
+    cmd->SetGraphicsRoot32BitConstants(1, 4, &p, 0);
+    cmd->SetGraphicsRootDescriptorTable(0,
+        m_dofSRVHeap->GetGPUDescriptorHandleForHeapStart());
+    cmd->OMSetRenderTargets(1, &dofRtv, FALSE, nullptr);
+    cmd->ClearRenderTargetView(dofRtv, kBlack, 0, nullptr);
+    cmd->DrawInstanced(3, 1, 0, 0);
+
+    // Restore depth to DEPTH_WRITE
+    auto b1 = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_renderer->GetDepthBuffer(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_DEPTH_WRITE);
+    cmd->ResourceBarrier(1, &b1);
+
+    // Transition dofRT to PSR so ToneMap can read it
+    auto b2 = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_dofRT.Get(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    cmd->ResourceBarrier(1, &b2);
+
+    // Redirect ToneMap input: update bloomSRVHeap slot 0 to point to dofRT
+    D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+    sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+    sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+    sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    sd.Texture2D.MipLevels     = 1;
+    m_device->CreateShaderResourceView(m_dofRT.Get(), &sd,
+        m_bloomSRVHeap->GetCPUDescriptorHandleForHeapStart()); // slot 0
+}
+
+void D3D12HelloTriangle::InitSSR()
+{
+    // Sky snapshot texture: same format as hdrRT, used as COPY_DEST then PSR
+    {
+        auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto rtDesc   = CD3DX12_RESOURCE_DESC::Tex2D(
+            DXGI_FORMAT_R16G16B16A16_FLOAT, m_width, m_height, 1, 1);
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &rtDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&m_skySnapshotRT)));
+    }
+
+    // Ocean SRV heap: [0]=heightMap  [1]=dztMap  [2]=skySnapshot
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC hd = {};
+        hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        hd.NumDescriptors = 3;
+        hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ThrowIfFailed(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_oceanSRVHeap)));
+        m_oceanSRVIncrSize = m_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
+
+    // Slots 0+1: FFT height/dzt maps (R32G32B32A32_FLOAT)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+        sd.Format                  = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels     = 1;
+
+        m_device->CreateShaderResourceView(m_oceanFFT->GetHeightMap(), &sd,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_oceanSRVHeap->GetCPUDescriptorHandleForHeapStart(), 0, m_oceanSRVIncrSize));
+        m_device->CreateShaderResourceView(m_oceanFFT->GetDztMap(), &sd,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_oceanSRVHeap->GetCPUDescriptorHandleForHeapStart(), 1, m_oceanSRVIncrSize));
+    }
+
+    // Slot 2: sky snapshot (R16G16B16A16_FLOAT)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
+        sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        sd.Texture2D.MipLevels     = 1;
+        m_device->CreateShaderResourceView(m_skySnapshotRT.Get(), &sd,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_oceanSRVHeap->GetCPUDescriptorHandleForHeapStart(), 2, m_oceanSRVIncrSize));
     }
 }
 
@@ -993,10 +1414,49 @@ void D3D12HelloTriangle::OnRender()
     m_skyDome->SetShowcaseMode(m_renderer->IsShowcaseMode());
     m_skyDome->Render(ctx);
 
-    ID3D12DescriptorHeap* srvHeaps[] = { m_oceanFFT->GetSRVHeap() };
+    // --- Snapshot sky into m_skySnapshotRT for SSR ---
+    {
+        // hdrRT is currently RT; transition to COPY_SOURCE for the blit
+        auto b0 = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_hdrRT.Get(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_COPY_SOURCE);
+        m_commandList->ResourceBarrier(1, &b0);
+
+        // skySnapshot starts in COPY_DEST (first frame) or PSR (subsequent)
+        if (m_skySnapshotInPSR)
+        {
+            auto b1 = CD3DX12_RESOURCE_BARRIER::Transition(
+                m_skySnapshotRT.Get(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_COPY_DEST);
+            m_commandList->ResourceBarrier(1, &b1);
+        }
+
+        m_commandList->CopyResource(m_skySnapshotRT.Get(), m_hdrRT.Get());
+
+        // skySnapshot → PSR for ocean shader to read
+        auto b2 = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_skySnapshotRT.Get(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        m_commandList->ResourceBarrier(1, &b2);
+        m_skySnapshotInPSR = true;
+
+        // Restore hdrRT to RT for ocean/rain rendering
+        auto b3 = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_hdrRT.Get(),
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_RENDER_TARGET);
+        m_commandList->ResourceBarrier(1, &b3);
+        m_commandList->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
+    }
+
+    // Bind ocean SRV heap (t0=height, t1=dzt, t2=skySnapshot)
+    ID3D12DescriptorHeap* srvHeaps[] = { m_oceanSRVHeap.Get() };
     m_commandList->SetDescriptorHeaps(1, srvHeaps);
     m_commandList->SetGraphicsRootDescriptorTable(1,
-    m_oceanFFT->GetSRVHeap()->GetGPUDescriptorHandleForHeapStart());
+        m_oceanSRVHeap->GetGPUDescriptorHandleForHeapStart());
     m_commandList->SetGraphicsRootConstantBufferView(
         2, m_rainSystem->GetRippleCBAddress());
 
@@ -1010,7 +1470,9 @@ void D3D12HelloTriangle::OnRender()
 
     RenderBloom();
     RenderGodRays();
+    RenderDOF();
     RenderToneMap();
+    RenderLensFlare();
 
     // ImGui 渲染（在 RT→Present barrier 之前）
     {

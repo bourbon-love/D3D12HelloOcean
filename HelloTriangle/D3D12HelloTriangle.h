@@ -93,6 +93,30 @@ private:
     bool  m_godRaysEnabled  = true;
     float m_godRayStrength  = 1.0f;
 
+    // Lens flare
+    ComPtr<ID3D12RootSignature>  m_lensFlareRootSig;
+    ComPtr<ID3D12PipelineState>  m_lensFlarePSO;
+    bool  m_lensFlareEnabled = true;
+    float m_lensFlareStrength = 1.0f;
+
+    // Depth of Field
+    ComPtr<ID3D12Resource>       m_dofRT;
+    ComPtr<ID3D12DescriptorHeap> m_dofSRVHeap;   // [0]=hdrRT  [1]=depthBuffer
+    ComPtr<ID3D12RootSignature>  m_dofRootSig;
+    ComPtr<ID3D12PipelineState>  m_dofPSO;
+    UINT                         m_dofSRVIncrSize = 0;
+    bool  m_dofEnabled    = false;
+    float m_dofFocusDepth = 0.92f;  // NDC depth [0,1] to focus on
+    float m_dofFocusRange = 0.12f;  // half-width of sharp zone in NDC
+    float m_dofMaxRadius  = 0.010f; // max CoC radius in UV space
+
+    // SSR
+    ComPtr<ID3D12Resource>       m_skySnapshotRT;
+    ComPtr<ID3D12DescriptorHeap> m_oceanSRVHeap;
+    UINT                         m_oceanSRVIncrSize = 0;
+    bool                         m_skySnapshotInPSR = false;
+    float                        m_ssrStrength = 1.0f;
+
     // Bloom post-process
     ComPtr<ID3D12Resource>       m_bloomExtractRT;
     ComPtr<ID3D12Resource>       m_bloomBlurRT;
@@ -118,6 +142,11 @@ private:
     float m_timeScale   = 1.0f;
     bool  m_timePaused  = false;
 
+    // Camera post-processing
+    bool  m_autoExposure     = true;
+    float m_vignetteStrength = 0.45f;
+    float m_grainStrength    = 0.018f;
+
     void LoadPipeline();
     void LoadAssets();
     void PopulateCommandList();
@@ -126,7 +155,12 @@ private:
     void InitBloom();
     void InitHDR();
     void InitGodRays();
+    void InitLensFlare();
+    void InitSSR();
+    void InitDOF();
     void RenderBloom();
+    void RenderDOF();
     void RenderGodRays();
     void RenderToneMap();
+    void RenderLensFlare();
 };

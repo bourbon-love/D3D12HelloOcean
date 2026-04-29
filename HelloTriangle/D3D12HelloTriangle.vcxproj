@@ -279,6 +279,22 @@ dxc.exe -nologo -Tps_6_0 -E"GodRayPS" -Zi -Qembed_debug -Fo"$(OutDir)godrays_God
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)godrays_GodRayVS.cso;$(OutDir)godrays_GodRayPS.cso</Outputs>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling god ray shaders</Message>
     </CustomBuild>
+    <CustomBuild Include="shaders\dof.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"DOFVS" -Zi -Qembed_debug -Fo"$(OutDir)dof_DOFVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"DOFPS" -Zi -Qembed_debug -Fo"$(OutDir)dof_DOFPS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)dof_DOFVS.cso;$(OutDir)dof_DOFPS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling DOF shaders</Message>
+    </CustomBuild>
+    <CustomBuild Include="shaders\lensflare.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"LensFlareVS" -Zi -Qembed_debug -Fo"$(OutDir)lensflare_LensFlareVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"LensFlarePS" -Zi -Qembed_debug -Fo"$(OutDir)lensflare_LensFlarePS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)lensflare_LensFlareVS.cso;$(OutDir)lensflare_LensFlarePS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling lens flare shaders</Message>
+    </CustomBuild>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

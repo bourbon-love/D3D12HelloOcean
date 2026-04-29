@@ -12,9 +12,10 @@ cbuffer SceneCB : register(b0)
     float padSun;
     float3 skyColor; // 天空主色，用于Fresnel反射
     float padSky;
-    float fogStart; // 雾开始距离
-    float fogEnd; // 雾结束距离
-    float2 padFog;
+    float fogStart;
+    float fogEnd;
+    float foamIntensity;
+    float ssrMix;
     // Wave parameters for 4 waves, 
     //each wave has direction, amplitude, wavelength, speed, step and padding
     float2 waveDir0;   float waveAmp0; float waveLen0;
@@ -47,8 +48,9 @@ cbuffer RippleCB : register(b1)
 };
 
 
-Texture2D<float4> g_heightMap : register(t0);
-Texture2D<float4> g_dztMap : register(t1);
+Texture2D<float4> g_heightMap   : register(t0);
+Texture2D<float4> g_dztMap      : register(t1);
+Texture2D<float4> g_skySnapshot : register(t2); // sky color captured before ocean render
 SamplerState g_sampler : register(s0);
 
 
@@ -154,6 +156,26 @@ VSOutput VSMain(VSInput vin)
     return vout;
 
 }
+// --- Procedural foam noise helpers ---
+float hash21(float2 p)
+{
+    p = frac(p * float2(127.1, 311.7));
+    p += dot(p, p + 45.32);
+    return frac(p.x * p.y);
+}
+
+float valueNoise(float2 p)
+{
+    float2 i = floor(p);
+    float2 f = frac(p);
+    float2 u = f * f * (3.0 - 2.0 * f);
+    float a = hash21(i);
+    float b = hash21(i + float2(1, 0));
+    float c = hash21(i + float2(0, 1));
+    float d = hash21(i + float2(1, 1));
+    return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
+}
+
 // Reconstruct sky color from a reflection direction, matching the dynamic sky palette
 float3 SampleSkyReflection(float3 reflDir)
 {
@@ -271,12 +293,29 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     float specular = pow(NdotH, 128.0f);
     float3 specularColor = sunColor * specular * sunIntensity * 15.0f;
 
-    // Fresnel with full dynamic sky reflection
+    // Fresnel
     float F0 = 0.02f;
     float NdotV = saturate(dot(N, V));
     float fresnel = F0 + (1.0f - F0) * pow(1.0f - NdotV, 5.0f);
     float3 reflectDir = reflect(-V, N);
-    float3 reflectColor = SampleSkyReflection(reflectDir) * fresnel * 2.0;
+
+    // SSR: project reflection ray to screen UV, sample sky snapshot
+    float3 reflectColor;
+    {
+        float4x4 vp = mul(view, proj); // combined view-proj (both already transposed)
+        float4 reflClip = mul(float4(pin.posW + reflectDir * 300.0, 1.0), vp);
+        float2 reflUV = reflClip.xy / reflClip.w * float2(0.5, -0.5) + 0.5;
+
+        // Fade at screen edges and for downward reflections
+        float2 edgeFade = saturate(min(reflUV, 1.0 - reflUV) * 6.0);
+        float fade = min(edgeFade.x, edgeFade.y);
+        fade *= saturate(reflectDir.y * 4.0 + 0.3); // below horizon = 0
+        fade *= ssrMix;
+
+        float3 ssrSample  = g_skySnapshot.SampleLevel(g_sampler, saturate(reflUV), 0).rgb;
+        float3 procSample = SampleSkyReflection(reflectDir);
+        reflectColor = lerp(procSample, ssrSample, fade) * fresnel * 2.0;
+    }
 
     float3 color = diffuse + specularColor + reflectColor;
 
@@ -286,12 +325,38 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     color = lerp(color, skyColor, fogFactor);
 
 
-    // 波峰Y值超过0.5时开始出现泡沫，超过1.0时完全是白色
+    // --- Jacobian whitecap foam ---
     float J = (1.0f + dDxdx) * (1.0f + dDzdz) - dDxdz * dDzdx;
-    float foam = 1.0f - saturate(J);
-    foam = pow(foam, 2.0f);
 
-    float3 foamColor = float3(2.5f, 2.5f, 2.5f); // HDR white — blooms on wave crests
-    color = lerp(color, foamColor, foam * 0.8f);
+    // Storm = broader/softer falloff; calm = sharp crests only
+    float sharpness = lerp(3.5, 1.6, foamIntensity);
+    float rawFoam = pow(saturate(1.0 - J), sharpness);
+    rawFoam *= lerp(0.2, 1.0, foamIntensity);
+
+    // Animated noise to break up foam into organic patches
+    float2 fuv = pin.uv * 60.0 + float2(time * 0.06, time * 0.04);
+    float n1 = valueNoise(fuv);
+    float n2 = valueNoise(fuv * 2.8 + float2(3.7, 1.3));
+    float noiseBlend = n1 * 0.65 + n2 * 0.35;
+
+    float foamMask = saturate(rawFoam * (0.4 + noiseBlend * 1.2));
+
+    // Secondary fine-spray layer (storm only)
+    float spray = 0.0;
+    [branch]
+    if (foamIntensity > 0.35)
+    {
+        float2 suv = pin.uv * 90.0 + float2(time * 0.18, time * 0.13);
+        float sn = valueNoise(suv);
+        spray = saturate(sn - 0.52) * saturate((foamIntensity - 0.35) * 3.0);
+        spray *= saturate(rawFoam * 4.0);
+    }
+
+    // HDR foam color (blooms) with subtle blue tint at edges
+    float3 foamWhite  = float3(2.2, 2.2, 2.3);
+    float3 foamEdge   = float3(1.7, 1.9, 2.3);
+    float3 foamColor  = lerp(foamEdge, foamWhite, noiseBlend);
+    color = lerp(color, foamColor, foamMask * 0.88);
+    color = lerp(color, foamWhite * 0.7, spray * 0.4);
     return float4(color, 1.0f);
 }

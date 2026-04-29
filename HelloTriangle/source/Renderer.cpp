@@ -189,16 +189,20 @@ void Renderer::Update(float deltaTime)
 
 
         // 雾气
-        if (m_showcaseMode)
-        {
-            cb.fogStart = 800.0f;
-            cb.fogEnd = 1200.0f;
-        }
-        else
         {
             float weatherIntensity = m_weatherSystem ? m_weatherSystem->GetWeatherIntensity() : 0.0f;
-            cb.fogStart = 280.0f - weatherIntensity * 150.0f;
-            cb.fogEnd = 380.0f - weatherIntensity * 150.0f;
+            if (m_showcaseMode)
+            {
+                cb.fogStart = 800.0f;
+                cb.fogEnd = 1200.0f;
+            }
+            else
+            {
+                cb.fogStart = 280.0f - weatherIntensity * 150.0f;
+                cb.fogEnd = 380.0f - weatherIntensity * 150.0f;
+            }
+            cb.foamIntensity = 0.15f + weatherIntensity * 0.85f;
+            cb.ssrMix = m_ssrMix;
         }
     }
     else
@@ -266,7 +270,7 @@ void Renderer::CreateDepthBuffer(UINT width, UINT height)
     depthDesc.Height = height;
     depthDesc.DepthOrArraySize = 1;
     depthDesc.MipLevels = 1;
-    depthDesc.Format = DXGI_FORMAT_D32_FLOAT;
+    depthDesc.Format = DXGI_FORMAT_R32_TYPELESS; // R32_TYPELESS lets us create both DSV(D32) and SRV(R32)
     depthDesc.SampleDesc.Count = 1;
     depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
