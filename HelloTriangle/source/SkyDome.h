@@ -1,4 +1,9 @@
-﻿#pragma once
+﻿// ============================================================
+// SkyDome.h
+// 天空球描画クラス。太陽・月の軌道追跡、稲妻ステートマシン、
+// 動的空カラーパレットを管理する。
+// ============================================================
+#pragma once
 #include <d3d12.h>
 #include <DirectXMath.h>
 #include <wrl.h>
@@ -47,8 +52,11 @@ public:
     }
     void SetWeatherIntensity(float intensity) { m_weatherIntensity = intensity; }
     void SetShowcaseMode(bool showcase) { m_showcaseMode = showcase; }
+    void SetWindDir(float x, float y) { m_windDirX = x; m_windDirY = y; }
 
-    // 月亮参数（供 ImGui 读写）
+    float GetLightningIntensity() const { return m_lightningIntensity; }
+
+    // 月亮参数（供 ImGui 読み書き）
     float GetCrescentRotSpeed()  const { return m_crescentRotSpeed; }
     float GetMoonBodyPow()       const { return m_moonBodyPow; }
     float GetMoonOccludePow()    const { return m_moonOccludePow; }
@@ -90,7 +98,9 @@ private:
         float     crescentOffsetAmt; // 月牙偏移量
         float     padMoonParams;
         float     lightningIntensity;
-        float     padLightning[3];
+        float     cloudDriftX;   // wind X * speed * time (cloud movement offset)
+        float     cloudDriftY;   // wind Z * speed * time
+        float     padLightning;
     };
     // 总计 = 64+16+16+16+12+4+4+4+4+4 = 144字节
     // __declspec(align(256))保证整个结构体从256字节对齐的地址开始
@@ -126,6 +136,8 @@ private:
     float     m_cloudSharpness = 0.6f;
     bool      m_showcaseMode = false;
     float m_weatherIntensity = 0.0f; // 0=晴天, 1=暴风
+    float m_windDirX = 1.0f;  // cloud drift wind direction X
+    float m_windDirY = 0.0f;  // cloud drift wind direction Z
     float m_lightningIntensity = 0.0f;
     float m_lightningCooldown  = 3.0f; // 首次触发前等待时间
     UINT m_width = 0;

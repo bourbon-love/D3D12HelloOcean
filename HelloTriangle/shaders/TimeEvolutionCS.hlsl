@@ -1,6 +1,11 @@
-﻿// Time evolution of frequency domain data
-// Updates h(k,t) from h0(k) each frame
-Texture2D<float4> g_h0 : register(t0); // Phillips初始化结果（只读）
+// ============================================================
+// TimeEvolutionCS.hlsl
+// 海洋スペクトルの時間発展コンピュートシェーダー。
+// 分散関係 ω(k)=√(g|k|) を用いて毎フレーム周波数域を更新する。
+// ============================================================
+// 周波数領域データの時間発展
+// 毎フレームh0(k)からh(k,t)を更新する
+Texture2D<float4> g_h0 : register(t0); // Phillips初期化結果（読み取り専用）
 RWTexture2D<float4> g_hkt : register(u0); // .xy = h(k,t), .zw = Dx(k,t)
 RWTexture2D<float4> g_dztMap : register(u1); // .xy = Dz(k,t)
 
@@ -15,7 +20,7 @@ cbuffer TimeCB : register(b0)
 static const float PI = 3.14159265f;
 static const float g = 9.81f;
 
-// 复数乘法
+// 複素数乗算
 float2 complexMul(float2 a, float2 b)
 {
     return float2(a.x * b.x - a.y * b.y,
@@ -46,21 +51,21 @@ void CSMain(uint3 id : SV_DispatchThreadID)
                  complexMul(float2(h0c.x, -h0c.y), expNeg);
 
     // Dx(k,t) = -i * (kx/|k|) * h(k,t)
-    // 乘 -i 等于：(a+bi)*(-i) = (b, -a)
+    // -iの乗算：(a+bi)*(-i) = (b, -a)
     float2 dxFreq = float2(0.0f, 0.0f);
     float2 dzFreq = float2(0.0f, 0.0f);
-    
+
     if (kLen > 1e-6f)
     {
-        
+
         float2 iHkt = float2(hkt.y, -hkt.x); // -i * hkt
-        // k.x/kLen 和 k.y/kLen 是单位方向向量，乘以 -i * hkt 就得到了频域的Dx和Dz
+        // k.x/kLenとk.y/kLenは単位方向ベクトル。-i*hktを乗算してDxとDzの周波数成分を得る
         dxFreq = (k.x / kLen) * iHkt; // dx = -i * (kx/|k|) * h(k,t)
-        dzFreq = (k.y / kLen) * iHkt; //dz = -i * (ky/|k|) * h(k,t)
+        dzFreq = (k.y / kLen) * iHkt; // dz = -i * (ky/|k|) * h(k,t)
     }
-    
+
     uint2 dst = uint2((id.x + (N >> 1)) % N, (id.y + (N >> 1)) % N);
     g_hkt[dst] = float4(hkt.x, hkt.y, dxFreq.x, dxFreq.y);
     g_dztMap[dst] = float4(dzFreq.x, dzFreq.y, 0.0f, 0.0f);
-  
+
 }

@@ -21,12 +21,11 @@ XMMATRIX Camera::GetViewMatrix() const
 
 XMMATRIX Camera::GetProjMatrix() const
 {
-    return XMMatrixPerspectiveFovLH(
-        fov,
-        aspect,
-        nearZ,
-        farZ
-    );
+    XMMATRIX proj = XMMatrixPerspectiveFovLH(fov, aspect, nearZ, farZ);
+    // TAAジッター：row[2]のx/y成分にNDCオフセットを加算（clip.x += jitter.x * pos.z）
+    proj.r[2] = XMVectorSetX(proj.r[2], XMVectorGetX(proj.r[2]) + m_jitter.x);
+    proj.r[2] = XMVectorSetY(proj.r[2], XMVectorGetY(proj.r[2]) + m_jitter.y);
+    return proj;
 }
 
 void Camera::ProcessMouse(float deltaX, float deltaY)

@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -rn \"//.*[一-鿿]\" \"E:/Study/HelloDX12/HelloTriangle/shaders.hlsl\" \"E:/Study/HelloDX12/HelloTriangle/skyShaders.hlsl\")",
+      "PowerShell($out = & \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"E:\\\\Study\\\\HelloDX12\\\\HelloTriangle\\\\D3D12HelloTriangle.vcxproj\" /p:Configuration=Debug /p:Platform=x64 /t:Build /v:minimal /m:1 /p:UseMultiToolTask=false 2>&1; $out | Select-String \"error C|error LNK|succeeded|D3D12HelloOcean\" | Select-Object -First 15; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "Bash(git checkout *)",
+      "PowerShell($out = & \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" \"E:\\\\Study\\\\HelloDX12\\\\HelloTriangle\\\\D3D12HelloTriangle.vcxproj\" /p:Configuration=Debug /p:Platform=x64 /t:Build /v:minimal /m:1 /p:UseMultiToolTask=false 2>&1; $errs = $out | Select-String \"error C|error LNK\" | Select-Object -First 5; if \\($errs\\) { $errs } else { $out | Select-String \"succeeded|D3D12HelloOcean\" | Select-Object -First 3 }; Write-Host \"EXIT:$LASTEXITCODE\")",
+      "PowerShell($content = Get-Content \"E:\\\\Study\\\\HelloDX12\\\\HelloTriangle\\\\source\\\\RainSystem.h\" -Raw; $lines = $content -split \"`n\"; Write-Host \"Total: $\\($lines.Count\\)\"; $lines | ForEach-Object { $i++; if \\($i -ge 55 -and $i -le 75\\) { Write-Host \"${i}: $_\" } })",
+      "Bash(grep -v \"^+//\")",
+      "Bash(python -c \"import docx; print\\('python-docx OK'\\)\")",
+      "Bash(pandoc --version)",
+      "PowerShell(try { $word = New-Object -ComObject Word.Application; Write-Host \"Word COM: OK, Version $\\($word.Version\\)\"; $word.Quit\\(\\) } catch { Write-Host \"Word COM: Not available - $_\" })",
+      "PowerShell(& \"E:\\\\Study\\\\HelloDX12\\\\generate_word.ps1\" 2>&1)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /p:UseMultiToolTask=false 2>&1 | Select-Object -Last 5)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /p:UseMultiToolTask=false 2>&1 | Where-Object { $_ -match \"error\" } | Select-Object -First 10)"
+    ]
+  }
+}

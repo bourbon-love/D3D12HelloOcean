@@ -95,7 +95,7 @@
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
-      <PrecompiledHeader>Use</PrecompiledHeader>
+      <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
@@ -103,6 +103,7 @@
       <SDLCheck>true</SDLCheck>
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <CompileAsWinRT>false</CompileAsWinRT>
+      <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -154,6 +155,7 @@
     <ClCompile Include="ImGUI\imgui_impl_win32.cpp" />
     <ClCompile Include="ImGUI\imgui_widgets.cpp" />
     <ClCompile Include="source\Camera.cpp" />
+    <ClCompile Include="source\FloatingObject.cpp" />
     <ClCompile Include="source\GridMesh.cpp" />
     <ClCompile Include="source\OceanFFT.cpp" />
     <ClCompile Include="source\RainSystem.cpp" />
@@ -166,7 +168,7 @@
     <ClCompile Include="Main.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="shaders.hlsl">
+    <CustomBuild Include="shaders\shaders.hlsl">
       <FileType>Document</FileType>
       <DeploymentContent>true</DeploymentContent>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"VSMain" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename)_VSMain.cso" "%(FullPath)"
@@ -183,39 +185,43 @@ dxc.exe -nologo -Tps_6_0 -E"PSMain" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename)_P
     <None Include="packages.config" />
   </ItemGroup>
   <ItemGroup>
-    <CustomBuild Include="skyShaders.hlsl">
+    <CustomBuild Include="shaders\skyShaders.hlsl">
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
       <FileType>Document</FileType>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"skyVS" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename)_VSMain.cso" "%(FullPath)"
 dxc.exe -nologo -Tps_6_0 -E"skyPS" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename)_PSMain.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"skyVS" -O3 -Fo"$(OutDir)%(Filename)_VSMain.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"skyPS" -O3 -Fo"$(OutDir)%(Filename)_PSMain.cso" "%(FullPath)"</Command>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">%(Identity)</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">%(Identity)</Message>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)%(Filename)_VSMain.cso;$(OutDir)%(Filename)_PSMain.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)%(Filename)_VSMain.cso;$(OutDir)%(Filename)_PSMain.cso</Outputs>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
     </CustomBuild>
   </ItemGroup>
   <ItemGroup>
-    <FxCompile Include="oceanCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">4.0</ShaderModel>
-      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CSMain</EntryPointName>
-      <ObjectFileOutput Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)%(Filename).cso</ObjectFileOutput>
-    </FxCompile>
-    <FxCompile Include="PhillipsCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">4.0</ShaderModel>
-      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CSMain</EntryPointName>
-    </FxCompile>
-    <FxCompile Include="shaders\IFFTCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">4.0</ShaderModel>
-      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CSMain</EntryPointName>
-    </FxCompile>
+    <CustomBuild Include="shaders\oceanCS.hlsl">
+      <FileType>Document</FileType>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tcs_6_0 -E"CSMain" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename).cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tcs_6_0 -E"CSMain" -O3 -Fo"$(OutDir)%(Filename).cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)%(Filename).cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)%(Filename).cso</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="shaders\PhillipsCS.hlsl">
+      <FileType>Document</FileType>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tcs_6_0 -E"CSMain" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename).cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tcs_6_0 -E"CSMain" -O3 -Fo"$(OutDir)%(Filename).cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)%(Filename).cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)%(Filename).cso</Outputs>
+    </CustomBuild>
+    <CustomBuild Include="shaders\IFFTCS.hlsl">
+      <FileType>Document</FileType>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tcs_6_0 -E"CSMain" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename).cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tcs_6_0 -E"CSMain" -O3 -Fo"$(OutDir)%(Filename).cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)%(Filename).cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)%(Filename).cso</Outputs>
+    </CustomBuild>
     <CustomBuild Include="shaders\rain.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">4.0</ShaderModel>
@@ -229,13 +235,13 @@ dxc.exe -nologo -Tps_6_0 -E"PSMain" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename)_P
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)%(Filename)_VSMain.cso;$(OutDir)%(Filename)_PSMain.cso</Outputs>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)%(Filename)_VSMain.cso;$(OutDir)%(Filename)_PSMain.cso</Outputs>
     </CustomBuild>
-    <FxCompile Include="shaders\TimeEvolutionCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">6.0</ShaderModel>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Release|x64'">4.0</ShaderModel>
-      <EntryPointName Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">CSMain</EntryPointName>
-    </FxCompile>
+    <CustomBuild Include="shaders\TimeEvolutionCS.hlsl">
+      <FileType>Document</FileType>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tcs_6_0 -E"CSMain" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename).cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tcs_6_0 -E"CSMain" -O3 -Fo"$(OutDir)%(Filename).cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)%(Filename).cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)%(Filename).cso</Outputs>
+    </CustomBuild>
     <CustomBuild Include="shaders\waterbody.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">4.0</ShaderModel>
@@ -256,44 +262,136 @@ dxc.exe -nologo -Tps_6_0 -E"PSMain" -Zi -Qembed_debug -Fo"$(OutDir)%(Filename)_P
     <CustomBuild Include="shaders\bloom.hlsl">
       <FileType>Document</FileType>
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"BloomVS"      -Zi -Qembed_debug -Fo"$(OutDir)bloom_BloomVS.cso"      "%(FullPath)"
 dxc.exe -nologo -Tps_6_0 -E"BrightPassPS" -Zi -Qembed_debug -Fo"$(OutDir)bloom_BrightPassPS.cso" "%(FullPath)"
 dxc.exe -nologo -Tps_6_0 -E"BlurPS"       -Zi -Qembed_debug -Fo"$(OutDir)bloom_BlurPS.cso"       "%(FullPath)"
 dxc.exe -nologo -Tps_6_0 -E"CompositePS"  -Zi -Qembed_debug -Fo"$(OutDir)bloom_CompositePS.cso"  "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"BloomVS"      -O3 -Fo"$(OutDir)bloom_BloomVS.cso"      "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"BrightPassPS" -O3 -Fo"$(OutDir)bloom_BrightPassPS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"BlurPS"       -O3 -Fo"$(OutDir)bloom_BlurPS.cso"       "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"CompositePS"  -O3 -Fo"$(OutDir)bloom_CompositePS.cso"  "%(FullPath)"</Command>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)bloom_BloomVS.cso;$(OutDir)bloom_BrightPassPS.cso;$(OutDir)bloom_BlurPS.cso;$(OutDir)bloom_CompositePS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)bloom_BloomVS.cso;$(OutDir)bloom_BrightPassPS.cso;$(OutDir)bloom_BlurPS.cso;$(OutDir)bloom_CompositePS.cso</Outputs>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling bloom shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling bloom shaders</Message>
     </CustomBuild>
     <CustomBuild Include="shaders\tonemapping.hlsl">
       <FileType>Document</FileType>
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"ToneMapVS" -Zi -Qembed_debug -Fo"$(OutDir)tonemapping_ToneMapVS.cso" "%(FullPath)"
 dxc.exe -nologo -Tps_6_0 -E"ToneMapPS" -Zi -Qembed_debug -Fo"$(OutDir)tonemapping_ToneMapPS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"ToneMapVS" -O3 -Fo"$(OutDir)tonemapping_ToneMapVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"ToneMapPS" -O3 -Fo"$(OutDir)tonemapping_ToneMapPS.cso" "%(FullPath)"</Command>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)tonemapping_ToneMapVS.cso;$(OutDir)tonemapping_ToneMapPS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)tonemapping_ToneMapVS.cso;$(OutDir)tonemapping_ToneMapPS.cso</Outputs>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling tonemapping shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling tonemapping shaders</Message>
     </CustomBuild>
     <CustomBuild Include="shaders\godrays.hlsl">
       <FileType>Document</FileType>
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"GodRayVS" -Zi -Qembed_debug -Fo"$(OutDir)godrays_GodRayVS.cso" "%(FullPath)"
 dxc.exe -nologo -Tps_6_0 -E"GodRayPS" -Zi -Qembed_debug -Fo"$(OutDir)godrays_GodRayPS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"GodRayVS" -O3 -Fo"$(OutDir)godrays_GodRayVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"GodRayPS" -O3 -Fo"$(OutDir)godrays_GodRayPS.cso" "%(FullPath)"</Command>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)godrays_GodRayVS.cso;$(OutDir)godrays_GodRayPS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)godrays_GodRayVS.cso;$(OutDir)godrays_GodRayPS.cso</Outputs>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling god ray shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling god ray shaders</Message>
     </CustomBuild>
     <CustomBuild Include="shaders\dof.hlsl">
       <FileType>Document</FileType>
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"DOFVS" -Zi -Qembed_debug -Fo"$(OutDir)dof_DOFVS.cso" "%(FullPath)"
 dxc.exe -nologo -Tps_6_0 -E"DOFPS" -Zi -Qembed_debug -Fo"$(OutDir)dof_DOFPS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"DOFVS" -O3 -Fo"$(OutDir)dof_DOFVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"DOFPS" -O3 -Fo"$(OutDir)dof_DOFPS.cso" "%(FullPath)"</Command>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)dof_DOFVS.cso;$(OutDir)dof_DOFPS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)dof_DOFVS.cso;$(OutDir)dof_DOFPS.cso</Outputs>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling DOF shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling DOF shaders</Message>
     </CustomBuild>
     <CustomBuild Include="shaders\lensflare.hlsl">
       <FileType>Document</FileType>
       <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"LensFlareVS" -Zi -Qembed_debug -Fo"$(OutDir)lensflare_LensFlareVS.cso" "%(FullPath)"
 dxc.exe -nologo -Tps_6_0 -E"LensFlarePS" -Zi -Qembed_debug -Fo"$(OutDir)lensflare_LensFlarePS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"LensFlareVS" -O3 -Fo"$(OutDir)lensflare_LensFlareVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"LensFlarePS" -O3 -Fo"$(OutDir)lensflare_LensFlarePS.cso" "%(FullPath)"</Command>
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)lensflare_LensFlareVS.cso;$(OutDir)lensflare_LensFlarePS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)lensflare_LensFlareVS.cso;$(OutDir)lensflare_LensFlarePS.cso</Outputs>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling lens flare shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling lens flare shaders</Message>
+    </CustomBuild>
+    <CustomBuild Include="shaders\taa.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"TAAVS" -Zi -Qembed_debug -Fo"$(OutDir)taa_TAAVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"TAAPS" -Zi -Qembed_debug -Fo"$(OutDir)taa_TAAPS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"TAAVS" -O3 -Fo"$(OutDir)taa_TAAVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"TAAPS" -O3 -Fo"$(OutDir)taa_TAAPS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)taa_TAAVS.cso;$(OutDir)taa_TAAPS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)taa_TAAVS.cso;$(OutDir)taa_TAAPS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling TAA shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling TAA shaders</Message>
+    </CustomBuild>
+    <CustomBuild Include="shaders\lightning.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"LightningVS" -Zi -Qembed_debug -Fo"$(OutDir)lightning_LightningVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"LightningPS" -Zi -Qembed_debug -Fo"$(OutDir)lightning_LightningPS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"LightningVS" -O3 -Fo"$(OutDir)lightning_LightningVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"LightningPS" -O3 -Fo"$(OutDir)lightning_LightningPS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)lightning_LightningVS.cso;$(OutDir)lightning_LightningPS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)lightning_LightningVS.cso;$(OutDir)lightning_LightningPS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling lightning shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling lightning shaders</Message>
+    </CustomBuild>
+    <CustomBuild Include="shaders\floating_object.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"FloatObjVS" -Zi -Qembed_debug -Fo"$(OutDir)floating_object_FloatObjVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"FloatObjPS" -Zi -Qembed_debug -Fo"$(OutDir)floating_object_FloatObjPS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"FloatObjVS" -O3 -Fo"$(OutDir)floating_object_FloatObjVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"FloatObjPS" -O3 -Fo"$(OutDir)floating_object_FloatObjPS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)floating_object_FloatObjVS.cso;$(OutDir)floating_object_FloatObjPS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)floating_object_FloatObjVS.cso;$(OutDir)floating_object_FloatObjPS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling floating object shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling floating object shaders</Message>
+    </CustomBuild>
+    <CustomBuild Include="shaders\ssao.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"SSAOVS"     -Zi -Qembed_debug -Fo"$(OutDir)ssao_SSAOVS.cso"     "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"SSAOPS"     -Zi -Qembed_debug -Fo"$(OutDir)ssao_SSAOPS.cso"     "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"SSAOBLURPS" -Zi -Qembed_debug -Fo"$(OutDir)ssao_SSAOBLURPS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"SSAOVS"     -O3 -Fo"$(OutDir)ssao_SSAOVS.cso"     "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"SSAOPS"     -O3 -Fo"$(OutDir)ssao_SSAOPS.cso"     "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"SSAOBLURPS" -O3 -Fo"$(OutDir)ssao_SSAOBLURPS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)ssao_SSAOVS.cso;$(OutDir)ssao_SSAOPS.cso;$(OutDir)ssao_SSAOBLURPS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)ssao_SSAOVS.cso;$(OutDir)ssao_SSAOPS.cso;$(OutDir)ssao_SSAOBLURPS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling SSAO shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling SSAO shaders</Message>
+    </CustomBuild>
+    <CustomBuild Include="shaders\shadowmap.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"ShadowVS" -Zi -Qembed_debug -Fo"$(OutDir)shadowmap_ShadowVS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"ShadowVS" -O3 -Fo"$(OutDir)shadowmap_ShadowVS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)shadowmap_ShadowVS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)shadowmap_ShadowVS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling shadow map shader</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling shadow map shader</Message>
     </CustomBuild>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

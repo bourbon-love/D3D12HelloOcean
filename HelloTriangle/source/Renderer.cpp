@@ -20,7 +20,7 @@ void Renderer::InitPSO(
     m_rootSignature = rootSignature;
     m_camera.aspect = static_cast<float>(width) / static_cast<float>(height);
 
-    // 保存字节码
+    // バイトコードを保存する
     m_vertexShaderData.assign(vsData, vsData + vsSize);
     m_pixelShaderData.assign(psData, psData + psSize);
 
@@ -39,7 +39,7 @@ void Renderer::InitPSO(
             0, &readRange, reinterpret_cast<void**>(&m_pCbvDataBegin)));
     }
 
-    // Input Layout
+    // 入力レイアウト
     D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
     {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -48,7 +48,7 @@ void Renderer::InitPSO(
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
-    // 实体PSO
+    // 実体PSO
     {
         
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
@@ -74,7 +74,7 @@ void Renderer::InitPSO(
     {
       
 
-        // 开启 alpha blending
+        // アルファブレンドを有効にする
         D3D12_BLEND_DESC blendDesc = {};
         blendDesc.RenderTarget[0].BlendEnable = TRUE;
         blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
@@ -85,11 +85,11 @@ void Renderer::InitPSO(
         blendDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
         blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-        // 关闭背面剔除，两面都可见
+        // 背面カリングを無効にして両面を可視にする
         CD3DX12_RASTERIZER_DESC rasterDesc(D3D12_DEFAULT);
         rasterDesc.CullMode = D3D12_CULL_MODE_NONE;
 
-        // 深度测试开启但不写入（透明物体不写深度）
+        // 深度テストを有効にするが書き込みは行わない（透明オブジェクトは深度を書かない）
         CD3DX12_DEPTH_STENCIL_DESC depthDesc(D3D12_DEFAULT);
         depthDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
 
@@ -111,7 +111,7 @@ void Renderer::InitPSO(
         ThrowIfFailed(m_device->CreateGraphicsPipelineState(
             &psoDesc, IID_PPV_ARGS(&m_waterBoxPSO)));
     }
-    // 线框PSO
+    // ワイヤーフレームPSO
     CreateWireframePSO();
 
     // Depth Buffer
@@ -121,8 +121,8 @@ void Renderer::InitPSO(
 void Renderer::InitResources(ComPtr<ID3D12GraphicsCommandList> commandList)
 {
     m_commandList = commandList;
-    CreateGridBuffers(commandList);  // 录制Grid上传命令
-	CreateWaterBoxBuffers(commandList); // 录制WaterBox上传命令
+    CreateGridBuffers(commandList);  // グリッドアップロードコマンドを記録する
+	CreateWaterBoxBuffers(commandList); // ウォーターボックスアップロードコマンドを記録する
     
 }
 
@@ -158,7 +158,7 @@ void Renderer::Update(float deltaTime)
     //cb.pad0 = cb.pad1 = cb.pad2 = 0.0f;
 	cb.cameraPos = m_camera.position;
 
-    // 从天空系统读取数据
+    // 空システムからデータを読み取る
     if (m_skyDome)
     {
         cb.sunDir = m_skyDome->GetSunDirection();
@@ -167,7 +167,7 @@ void Renderer::Update(float deltaTime)
         cb.skyColor = m_skyDome->GetSkyColor();
         cb.padSky = 0.0f;
 
-        // 根据太阳高度在日光和月光之间平滑插值，过渡带 sunY ∈ [-0.1, 0.1]
+        // 太陽の高さに応じて日光と月光の間で滑らかに補間する。遷移帯 sunY ∈ [-0.1, 0.1]
         float sunY = m_skyDome->GetSunDirection().y;
         float dayBlend = std::clamp((sunY + 0.1f) / 0.2f, 0.0f, 1.0f);
 
@@ -188,7 +188,7 @@ void Renderer::Update(float deltaTime)
             std::lerp(moonCol.z, sunCol.z, dayBlend));
 
 
-        // 雾气
+        // 霧
         {
             float weatherIntensity = m_weatherSystem ? m_weatherSystem->GetWeatherIntensity() : 0.0f;
             if (m_showcaseMode)
@@ -207,7 +207,7 @@ void Renderer::Update(float deltaTime)
     }
     else
     {
-        // 没有天空系统时的默认值
+        // 空システムがない場合のデフォルト値
         cb.sunDir = { 0.5f, 1.0f, 0.3f };
         cb.sunIntensity = 1.0f;
         cb.sunColor = { 1.0f, 0.95f, 0.8f };
@@ -216,8 +216,8 @@ void Renderer::Update(float deltaTime)
         cb.padSky = 0.0f;
         
     }
-    // 4个叠加波的参数
-    //               方向              振幅   波长   速度   陡度
+    // 4つの重畳波のパラメータ
+    //               方向              振幅   波長   速度   急峻度
     cb.waves[0] = { {1.0f,  0.0f},  0.3f,  60.0f, 1.0f, 0.06f }; 
     cb.waves[1] = { {0.7f,  0.7f},  0.15f, 35.0f, 1.3f, 0.05f };  
     cb.waves[2] = { {0.2f, -0.9f},  0.08f, 20.0f, 1.6f, 0.04f }; 
@@ -234,7 +234,7 @@ void Renderer::Update(float deltaTime)
     if (GetAsyncKeyState('A') & 0x8000) right -= speed;
 
     m_camera.Move(forward, right);
-	// 展示模式下自动环绕
+	// ショーケースモードで自動周回する
     if (m_showcaseMode)
         m_camera.UpdateShowcase(deltaTime);
 }
@@ -253,9 +253,9 @@ void Renderer::ToggleWireframe()
 
 void Renderer::CreateDepthBuffer(UINT width, UINT height)
 
-//create DSVHeap and Depth Buffer
+// DSVヒープとデプスバッファを作成する
 {
-    //DSV Descriptor Heap 
+    // DSVディスクリプタヒープ
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
     dsvHeapDesc.NumDescriptors = 1;
     dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
@@ -263,21 +263,21 @@ void Renderer::CreateDepthBuffer(UINT width, UINT height)
     ThrowIfFailed(m_device->CreateDescriptorHeap(
         &dsvHeapDesc, IID_PPV_ARGS(&m_dsvHeap)));
 
-    //Depth Buffer Resource
+    // デプスバッファリソース
     D3D12_RESOURCE_DESC depthDesc = {};
     depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     depthDesc.Width = width;
     depthDesc.Height = height;
     depthDesc.DepthOrArraySize = 1;
     depthDesc.MipLevels = 1;
-    depthDesc.Format = DXGI_FORMAT_R32_TYPELESS; // R32_TYPELESS lets us create both DSV(D32) and SRV(R32)
+    depthDesc.Format = DXGI_FORMAT_R32_TYPELESS; // R32_TYPELESSを使うことでDSV(D32)とSRV(R32)の両方を作成できる
     depthDesc.SampleDesc.Count = 1;
     depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-    // 清除值 — GPU优化用，告诉驱动每帧清除的目标值
+    // クリア値 — GPU最適化用。毎フレームのクリア目標値をドライバーに伝える
     D3D12_CLEAR_VALUE clearValue = {};
     clearValue.Format = DXGI_FORMAT_D32_FLOAT;
-    clearValue.DepthStencil.Depth = 1.0f; //1.0 = 最远
+    clearValue.DepthStencil.Depth = 1.0f; // 1.0 = 最遠
     clearValue.DepthStencil.Stencil = 0;
 
     auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
@@ -285,11 +285,11 @@ void Renderer::CreateDepthBuffer(UINT width, UINT height)
         &heapProp,
         D3D12_HEAP_FLAG_NONE,
         &depthDesc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE,//初始状态直接是depth_write
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, // 初期状態は直接DEPTH_WRITE
         &clearValue,
         IID_PPV_ARGS(&m_depthBuffer)));
 
-    //create DSV Discrib in heap num0
+    // ヒープのスロット0にDSVを作成する
     D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
     dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
     dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
@@ -304,11 +304,11 @@ void Renderer::CreateDepthBuffer(UINT width, UINT height)
 
 void Renderer::CreateGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
 {
-    // 生成32x32网格，世界空间20x20单位大小
+    // グリッドを生成する（ワールド空間サイズGRID_WORLD_SIZE）
     GridMeshData grid = GenerateGrid(GRID_SIZE, GRID_SIZE, GRID_WORLD_SIZE);
     m_gridIndexCount = static_cast<UINT>(grid.indices.size());
 
-    // ---- Vertex Buffer ----
+    // ---- 頂点バッファ ----
     UINT vbSize = static_cast<UINT>(
         grid.vertices.size() * sizeof(GridVertex));
 
@@ -316,26 +316,26 @@ void Renderer::CreateGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
     auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     auto vbDesc = CD3DX12_RESOURCE_DESC::Buffer(vbSize);
 
-    // Default Heap（GPU只读，最快）
+    // デフォルトヒープ（GPU読み取り専用、最速）
     ThrowIfFailed(m_device->CreateCommittedResource(
         &defaultHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
         IID_PPV_ARGS(&m_gridVB)));
 
-    // Upload Heap（CPU写入，作为中转）
+    // アップロードヒープ（CPU書き込み、中継用）
     ThrowIfFailed(m_device->CreateCommittedResource(
         &uploadHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&m_gridVBUpload)));
 
-    // CPU把顶点数据写入Upload Heap
+    // CPUが頂点データをアップロードヒープに書き込む
     void* pData = nullptr;
     CD3DX12_RANGE readRange(0, 0);
     ThrowIfFailed(m_gridVBUpload->Map(0, &readRange, &pData));
     memcpy(pData, grid.vertices.data(), vbSize);
     m_gridVBUpload->Unmap(0, nullptr);
 
-    // 录制GPU复制命令：Upload → Default
+    // GPUコピーコマンドを記録する：Upload → Default
     cmdList->CopyBufferRegion(
         m_gridVB.Get(), 0, m_gridVBUpload.Get(), 0, vbSize);
 
@@ -345,12 +345,12 @@ void Renderer::CreateGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
         D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     cmdList->ResourceBarrier(1, &vbBarrier);
 
-    // VBV
+    // VBVを設定する
     m_gridVBView.BufferLocation = m_gridVB->GetGPUVirtualAddress();
     m_gridVBView.StrideInBytes = sizeof(GridVertex);
     m_gridVBView.SizeInBytes = vbSize;
 
-    // ---- Index Buffer ----
+    // ---- インデックスバッファ ----
     UINT ibSize = static_cast<UINT>(
         grid.indices.size() * sizeof(uint32_t));
     auto ibDesc = CD3DX12_RESOURCE_DESC::Buffer(ibSize);
@@ -395,14 +395,14 @@ void Renderer::CreateWireframePSO()
     };
 
     CD3DX12_RASTERIZER_DESC rasterDesc(D3D12_DEFAULT);
-    rasterDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;  // 线框
-    rasterDesc.CullMode = D3D12_CULL_MODE_NONE;       // 关闭背面剔除
+    rasterDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;  // ワイヤーフレーム
+    rasterDesc.CullMode = D3D12_CULL_MODE_NONE;       // 背面カリングを無効にする
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
     psoDesc.pRootSignature = m_rootSignature.Get();
 
-    // 复用已保存的字节码，和实体PSO用同一套Shader
+    // 保存済みのバイトコードを再利用する。実体PSOと同じシェーダーセットを使用する
     psoDesc.VS = CD3DX12_SHADER_BYTECODE(
         m_vertexShaderData.data(), m_vertexShaderData.size());
     psoDesc.PS = CD3DX12_SHADER_BYTECODE(
@@ -435,7 +435,7 @@ void Renderer::CreateWaterBoxBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
     auto defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
     auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
-    // VB
+    // 頂点バッファ
     auto vbDesc = CD3DX12_RESOURCE_DESC::Buffer(vbSize);
     ThrowIfFailed(m_device->CreateCommittedResource(
         &defaultHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
@@ -462,7 +462,7 @@ void Renderer::CreateWaterBoxBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
     m_boxVBView.StrideInBytes = sizeof(GridVertex);
     m_boxVBView.SizeInBytes = vbSize;
 
-    // IB
+    // インデックスバッファ
     auto ibDesc = CD3DX12_RESOURCE_DESC::Buffer(ibSize);
     ThrowIfFailed(m_device->CreateCommittedResource(
         &defaultHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,

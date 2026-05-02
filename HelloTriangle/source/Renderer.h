@@ -1,4 +1,9 @@
-﻿#pragma once
+﻿// ============================================================
+// Renderer.h
+// 海洋メッシュ描画クラス。512×512グリッド、FFT高さマップサンプリング、
+// Gerstnerウェーブ、シーン定数バッファ、カメラ制御を管理する。
+// ============================================================
+#pragma once
 #include <d3d12.h>
 #include <wrl.h>
 #include "renderer/RendererContext.h"
@@ -53,6 +58,7 @@ public:
     void SetSkyDome(SkyDome* skyDome) { m_skyDome = skyDome; }
     void SetWeatherSystem(WeatherSystem* ws) { m_weatherSystem = ws; }
     void SetSSRMix(float v) { m_ssrMix = v; }
+    void SetJitter(float x, float y) { m_camera.m_jitter = { x, y }; }
     XMMATRIX GetViewMatrix() const
     {
         return m_camera.GetViewMatrix();
