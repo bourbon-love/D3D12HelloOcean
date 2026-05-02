@@ -1,13 +1,18 @@
+// ============================================================
+// godrays.hlsl
+// 体積光（ゴッドレイ）シェーダー。
+// 太陽スクリーン位置に向けた64サンプルの放射状ブラーで光条を生成する。
+// ============================================================
 Texture2D    g_hdr     : register(t0);
 SamplerState g_sampler : register(s0);
 
 cbuffer GodRayCB : register(b0)
 {
-    float2 sunScreenPos;  // sun UV in [0,1] screen space
-    float  density;       // step scale toward sun
-    float  decay;         // per-sample attenuation
-    float  weight;        // per-sample brightness
-    float  sunVisibility; // 0=night/offscreen, 1=full sun
+    float2 sunScreenPos;  // スクリーン空間[0,1]での太陽UV
+    float  density;       // 太陽方向へのステップスケール
+    float  decay;         // サンプルごとの減衰量
+    float  weight;        // サンプルごとの輝度
+    float  sunVisibility; // 0=夜/画外、1=完全に見える
 };
 
 struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD; };
@@ -36,7 +41,7 @@ float4 GodRayPS(VSOut i) : SV_Target
     {
         uv -= delta;
         float3 s = g_hdr.SampleLevel(g_sampler, saturate(uv), 0).rgb;
-        // Only bright sky areas contribute (threshold out dark ocean)
+        // 明るい空の領域のみが寄与する（暗い海洋を閾値でカット）
         float lum = dot(s, float3(0.2126, 0.7152, 0.0722));
         s *= saturate((lum - 0.4) / 0.6);
         color     += s * decay_acc * weight;

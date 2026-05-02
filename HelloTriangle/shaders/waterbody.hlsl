@@ -1,4 +1,8 @@
-﻿cbuffer SceneCB : register(b0)
+// ============================================================
+// waterbody.hlsl
+// 水体バウンディングボックスの半透明描画シェーダー。
+// ============================================================
+cbuffer SceneCB : register(b0)
 {
     float4x4 view;
     float4x4 proj;
@@ -67,30 +71,30 @@ VSOutput VSMain(VSInput vin)
 
 float4 PSMain(VSOutput pin) : SV_TARGET
 {
-    // 基础水体颜色：深蓝半透明
-    float3 deepColor = float3(0.02f, 0.12f, 0.3f); 
+    // 基本の水体色：深い青、半透明
+    float3 deepColor = float3(0.02f, 0.12f, 0.3f);
     float3 surfaceColor = float3(0.08f, 0.3f, 0.6f);
 
-    // 根据深度插值颜色：越深越暗
+    // 深さに応じて色を補間：深いほど暗くなる
     float depthFactor = saturate(-pin.posW.y / 200.0f);
     float3 waterColor = lerp(surfaceColor, deepColor, depthFactor);
 
-    // Fresnel：视线越平行于面，越透明
+    // Fresnel：視線が面と平行になるほど透明になる
     float3 V = normalize(cameraPos - pin.posW);
-    float3 N = float3(0.0f, 0.0f, 1.0f); // 默认法线朝前，实际由面决定
+    float3 N = float3(0.0f, 0.0f, 1.0f); // デフォルト法線は前方向、実際は面が決める
     float NdotV = abs(dot(N, V));
     float fresnel = 1.0f - saturate(NdotV);
     fresnel = pow(fresnel, 2.0f);
 
-    // 太阳光散射：让水体有光感
+    // 太陽光散乱：水体に光感を与える
     float3 L = sunDir;
     float sunScatter = saturate(dot(L, float3(0.0f, -1.0f, 0.0f)));
     waterColor += sunColor * sunScatter * sunIntensity * 0.3f;
 
-    // alpha：正视时较透明，斜视时较不透明
+    // アルファ：正面から見ると透明、斜めから見ると不透明
     float alpha = lerp(0.5f, 0.85f, fresnel);
 
-    // 雾
+    // 霧
     float dist = length(cameraPos - pin.posW);
     float fogFactor = saturate((dist - fogStart) / (fogEnd - fogStart));
     waterColor = lerp(waterColor, skyColor, fogFactor * 0.5f);

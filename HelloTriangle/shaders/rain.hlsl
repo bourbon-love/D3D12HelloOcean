@@ -1,4 +1,8 @@
-﻿cbuffer RainCB : register(b0)
+// ============================================================
+// rain.hlsl
+// 雨粒子ビルボードの頂点・ピクセルシェーダー。
+// ============================================================
+cbuffer RainCB : register(b0)
 {
     float4x4 viewProj;
     float alpha;
@@ -27,8 +31,8 @@ VSOutput VSMain(VSInput vin)
 
 float4 PSMain(VSOutput pin) : SV_TARGET
 {
-    // 雨线颜色：略微偏蓝的白色，半透明
+    // 雨線の色：わずかに青みがかった白、半透明
     float3 rainColor = float3(0.7f, 0.8f, 1.0f);
     return float4(rainColor, pin.alpha);
-    
+
 }

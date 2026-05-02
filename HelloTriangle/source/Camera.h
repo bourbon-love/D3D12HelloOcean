@@ -1,4 +1,8 @@
-﻿#pragma once
+﻿// ============================================================
+// Camera.h
+// カメラクラス。WASD+マウス操作と自動ショーケース周回モードを提供する。
+// ============================================================
+#pragma once
 #include <DirectXMath.h>
 
 using namespace DirectX;
@@ -12,6 +16,7 @@ struct Camera
 
     float m_pitch = -0.0f; // 上下看
     float m_yaw = 0.0f;   // 左右看
+    XMFLOAT2 m_jitter = { 0.0f, 0.0f }; // TAAサブピクセルジッター（NDC空間）
     float sensitivity = 0.002f;
     float fov = XM_PIDIV4;
     float aspect = 1.0f;
