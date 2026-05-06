@@ -12,7 +12,18 @@
       "PowerShell(try { $word = New-Object -ComObject Word.Application; Write-Host \"Word COM: OK, Version $\\($word.Version\\)\"; $word.Quit\\(\\) } catch { Write-Host \"Word COM: Not available - $_\" })",
       "PowerShell(& \"E:\\\\Study\\\\HelloDX12\\\\generate_word.ps1\" 2>&1)",
       "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /p:UseMultiToolTask=false 2>&1 | Select-Object -Last 5)",
-      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /p:UseMultiToolTask=false 2>&1 | Where-Object { $_ -match \"error\" } | Select-Object -First 10)"
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal /p:UseMultiToolTask=false 2>&1 | Where-Object { $_ -match \"error\" } | Select-Object -First 10)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" E:\\\\Study\\\\HelloDX12\\\\D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal 2>&1 | Select-Object -Last 15)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" E:\\\\Study\\\\HelloDX12\\\\D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal 2>&1 | Select-Object -Last 5)",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" E:\\\\Study\\\\HelloDX12\\\\D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal 2>&1 | Select-Object -Last 10)",
+      "Bash(awk -F: '{print $1 \":\" $2 \"\\\\t\" $3}')",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" E:\\\\Study\\\\HelloDX12\\\\D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal 2>&1 | Select-Object -Last 30)",
+      "PowerShell(Get-Process *)",
+      "PowerShell(Rename-Item *)",
+      "PowerShell(Remove-Item *)",
+      "Bash(echo \"exit: $?\")",
+      "PowerShell(& \"C:\\\\Program Files\\\\Microsoft Visual Studio\\\\2022\\\\Enterprise\\\\MSBuild\\\\Current\\\\Bin\\\\MSBuild.exe\" E:\\\\Study\\\\HelloDX12\\\\D3D12HelloWorld.sln /p:Configuration=Debug /p:Platform=x64 /v:minimal 2>&1 | Select-Object -Last 20)",
+      "PowerShell($lines = Get-Content \"E:\\\\Study\\\\HelloDX12\\\\HelloTriangle\\\\D3D12HelloTriangle.cpp\" -Encoding UTF8; $i=1; foreach \\($l in $lines\\) { if \\($l -cmatch '[^\\\\x00-\\\\x7F]'\\) { Write-Host \"${i}: $l\" }; $i++ })"
     ]
   }
 }
