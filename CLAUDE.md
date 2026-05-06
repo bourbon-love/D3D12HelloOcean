@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Git 提交规范
 
-提交时**不要**在 commit message 中添加 `Co-Authored-By: Claude` 字样，直接用简洁的中文描述提交内容。
+提交时**不要**在 commit message 中添加 `Co-Authored-By: Claude` 字样，直接用简洁日文描述提交内容。
 
 ## 构建方法
 

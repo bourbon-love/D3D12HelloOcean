@@ -13,9 +13,9 @@ void FloatingObject::Init(
 {
     m_device = device;
 
-    // Constant buffer array: MAX_BOXES slots, each 256-byte aligned
+    // Constant buffer array: surface boxes + underwater boxes
     {
-        UINT64 cbTotal = sizeof(ObjectCB) * MAX_BOXES;
+        UINT64 cbTotal = sizeof(ObjectCB) * (MAX_BOXES + MAX_UW_BOXES);
         auto hp  = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
         auto buf = CD3DX12_RESOURCE_DESC::Buffer(cbTotal);
         ThrowIfFailed(m_device->CreateCommittedResource(
@@ -202,6 +202,70 @@ void FloatingObject::SpawnBox()
     b.position.y  = ((float)rand() / RAND_MAX * 2.0f - 1.0f) * r;
     b.dropOffset  = SPAWN_HEIGHT;
     m_boxes.push_back(b);
+}
+
+void FloatingObject::SpawnUnderwaterBox()
+{
+    if ((int)m_uwBoxes.size() >= MAX_UW_BOXES) return;
+
+    float r = 80.0f;
+    UwBox b;
+    b.pos.x = ((float)rand() / RAND_MAX * 2.0f - 1.0f) * r;
+    b.pos.y = -8.0f - (float)rand() / RAND_MAX * 4.0f;  // -8 to -12m below sea level
+    b.pos.z = ((float)rand() / RAND_MAX * 2.0f - 1.0f) * r;
+    m_uwBoxes.push_back(b);
+}
+
+void FloatingObject::RenderUnderwater(
+    RenderContext& ctx,
+    XMFLOAT3 sunDir, float sunIntensity,
+    XMFLOAT3 sunColor, XMFLOAT3 cameraPos)
+{
+    if (m_uwBoxes.empty()) return;
+
+    // Attenuate sun intensity by water absorption (boxes are ~8-12m deep)
+    float depthAttenuation = expf(-0.25f * 8.0f);  // approx Beer-Lambert for 8m
+    float uwSunIntensity = sunIntensity * depthAttenuation;
+    // Water tints the color toward blue-green
+    XMFLOAT3 uwSunColor = { sunColor.x * 0.3f, sunColor.y * 0.7f, sunColor.z * 1.0f };
+
+    XMMATRIX vp = XMMatrixTranspose(ctx.view * ctx.proj);
+
+    // UW boxes use CB slots starting at MAX_BOXES
+    for (int i = 0; i < (int)m_uwBoxes.size(); ++i)
+    {
+        ObjectCB& cb = m_mappedCBs[MAX_BOXES + i];
+        cb.viewProj      = vp;
+        cb.worldPos      = XMFLOAT3(m_uwBoxes[i].pos.x, 0.0f, m_uwBoxes[i].pos.z);
+        cb.objectScale   = scale * 0.6f;  // smaller boxes
+        cb.sunDir        = sunDir;
+        cb.sunIntensity  = uwSunIntensity;
+        cb.sunColor      = uwSunColor;
+        cb.gridWorldSize = 400.0f;
+        cb.cameraPos     = cameraPos;
+        cb.dropOffset    = m_uwBoxes[i].pos.y;  // 負の値 → 波高 + 水深オフセット
+    }
+
+    auto* cmd = ctx.cmd;
+    cmd->SetGraphicsRootSignature(m_rootSig.Get());
+    ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
+    cmd->SetDescriptorHeaps(1, heaps);
+    cmd->SetGraphicsRootDescriptorTable(1, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+    cmd->SetPipelineState(m_pso.Get());
+    cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    cmd->IASetVertexBuffers(0, 1, &m_vbView);
+    cmd->IASetIndexBuffer(&m_ibView);
+    cmd->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
+    cmd->RSSetViewports(1, &ctx.viewport);
+    cmd->RSSetScissorRects(1, &ctx.scissor);
+
+    for (int i = 0; i < (int)m_uwBoxes.size(); ++i)
+    {
+        UINT64 addr = m_cb->GetGPUVirtualAddress()
+                    + (MAX_BOXES + i) * sizeof(ObjectCB);
+        cmd->SetGraphicsRootConstantBufferView(0, addr);
+        cmd->DrawIndexedInstanced(m_indexCount, 1, 0, 0, 0);
+    }
 }
 
 void FloatingObject::Render(

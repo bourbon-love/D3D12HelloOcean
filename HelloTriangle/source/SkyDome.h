@@ -53,6 +53,7 @@ public:
     void SetWeatherIntensity(float intensity) { m_weatherIntensity = intensity; }
     void SetShowcaseMode(bool showcase) { m_showcaseMode = showcase; }
     void SetWindDir(float x, float y) { m_windDirX = x; m_windDirY = y; }
+    void SetCameraY(float y)          { m_cameraY = y; }
 
     float GetLightningIntensity() const { return m_lightningIntensity; }
 
@@ -101,6 +102,10 @@ private:
         float     cloudDriftX;   // wind X * speed * time (cloud movement offset)
         float     cloudDriftY;   // wind Z * speed * time
         float     padLightning;
+        float     cameraY;       // world Y of camera (negative = underwater)
+        float     padCam1;
+        float     padCam2;
+        float     padCam3;
     };
     // 总计 = 64+16+16+16+12+4+4+4+4+4 = 144字节
     // __declspec(align(256))保证整个结构体从256字节对齐的地址开始
@@ -139,6 +144,7 @@ private:
     float m_windDirX = 1.0f;  // cloud drift wind direction X
     float m_windDirY = 0.0f;  // cloud drift wind direction Z
     float m_lightningIntensity = 0.0f;
+    float m_cameraY            = 0.0f;
     float m_lightningCooldown  = 3.0f; // 首次触发前等待时间
     UINT m_width = 0;
     UINT m_height = 0;

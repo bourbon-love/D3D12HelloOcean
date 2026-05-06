@@ -1,7 +1,6 @@
 // ============================================================
 // tonemapping.hlsl
-// ACESフィルミックトーンマッピングシェーダー。
-// HDR→LDR変換、ビネット、フィルムグレイン合成を担当する。
+// ACES トーンマッピング + ビネット + フィルムグレイン + 水中カメラ効果
 // ============================================================
 Texture2D    g_hdr     : register(t0);
 Texture2D    g_bloom   : register(t1);
@@ -17,8 +16,12 @@ cbuffer ToneCB : register(b0)
     float vignetteStrength;
     float grainStrength;
     float time;
-    float aoStrength;   // SSAO blend (0=off, 1=full)
+    float aoStrength;
     float pad;
+    float cameraY;    // world Y of camera (negative = underwater)
+    float pad2;
+    float pad3;
+    float pad4;
 };
 
 struct VSOut
@@ -44,25 +47,77 @@ float3 ACESFilmic(float3 x)
 
 float4 ToneMapPS(VSOut i) : SV_Target
 {
-    float3 hdr     = g_hdr.Sample(g_sampler, i.uv).rgb;
+    // 水中ブレンド係数（0=水面上, 1=完全水中、2m で飽和）
+    float uwBlend = saturate(-cameraY / 2.0);
+    float uwDepth = max(0.0, -cameraY);
+
+    // 水中の場合、HDR サンプル UV に表面波の屈折ゆらぎを適用
+    float2 sampleUV = i.uv;
+    if (uwBlend > 0.001)
+    {
+        float2 warp = float2(
+            sin(i.uv.y * 22.0 + time * 2.4) * 0.009,
+            cos(i.uv.x * 18.0 + time * 1.8) * 0.007
+        ) * uwBlend;
+        sampleUV = clamp(i.uv + warp, 0.001, 0.999);
+    }
+
+    float3 hdr     = g_hdr.Sample(g_sampler, sampleUV).rgb;
     float3 bloom   = g_bloom.Sample(g_sampler, i.uv).rgb;
     float3 godrays = g_godrays.Sample(g_sampler, i.uv).rgb;
     float  ao      = lerp(1.0, g_ssao.Sample(g_sampler, i.uv).r, aoStrength);
 
     float3 ldr = ACESFilmic(hdr * ao * exposure + bloom * bloomStrength + godrays * godRayStrength);
 
-    // ビネット：中心から滑らかな暗部フォールオフ
+    // ビネット
     float2 centered = i.uv - 0.5;
-    float  vigDist  = dot(centered, centered); // 中心で0、角で0.5
+    float  vigDist  = dot(centered, centered);
     float  vignette = 1.0 - smoothstep(0.10, 0.65, vigDist) * vignetteStrength;
     ldr *= vignette;
 
-    // フィルムグレイン：アニメーション付きハッシュノイズ、暗部で強め
+    // フィルムグレイン
     float2 gUV  = i.uv * 800.0 + float2(time * 37.0, time * 53.0);
     float  grain = frac(sin(dot(floor(gUV), float2(127.1, 311.7))) * 43758.5453);
-    grain = (grain - 0.5) * 2.0;                          // [-1, 1]
+    grain = (grain - 0.5) * 2.0;
     float  lum = dot(ldr, float3(0.2126, 0.7152, 0.0722));
-    ldr += grain * grainStrength * (1.0 - lum * 0.6);     // 暗部でグレインを強くする
+    ldr += grain * grainStrength * (1.0 - lum * 0.6);
+
+    // ----------------------------------------------------------
+    // 水中カメラ効果
+    // ----------------------------------------------------------
+    if (uwBlend > 0.001)
+    {
+        // Beer-Lambert 色吸収（赤が最も速く減衰）
+        float3 absorb = float3(
+            exp(-0.28 * uwDepth),
+            exp(-0.08 * uwDepth),
+            exp(-0.025 * uwDepth));
+        ldr *= lerp(float3(1.0, 1.0, 1.0), absorb, uwBlend);
+
+        // 深海フォグ（深いほど暗い青緑に）
+        float3 fogColor = float3(0.01, 0.07, 0.18);
+        float  fogAmt   = 1.0 - exp(-uwDepth * 0.09);
+        ldr = lerp(ldr, fogColor, fogAmt * uwBlend);
+
+        // コースティクス（水面から差し込む揺れる光紋、浅いほど強い）
+        float causticStr = uwBlend * saturate(1.0 - uwDepth * 0.18);
+        if (causticStr > 0.001)
+        {
+            float2 cuv = i.uv * float2(9.0, 11.0);
+            float  c   = sin(cuv.x * 2.1 + sin(cuv.y * 1.8 + time * 1.2) * 1.6 + time * 2.0)
+                       * sin(cuv.y * 2.4 + sin(cuv.x * 1.6 + time * 0.9) * 1.4 + time * 1.6);
+            c = pow(saturate(c * 0.5 + 0.5), 4.0);
+            ldr += c * 0.28 * causticStr;
+        }
+
+        // 水中ビネット強化（周辺部をより暗く）
+        float uwVig = smoothstep(0.15, 0.60, vigDist) * 0.5 * uwBlend;
+        ldr *= (1.0 - uwVig);
+
+        // 全体を微かに青緑にシフト
+        float3 uwTint = float3(0.75, 0.92, 1.08);
+        ldr *= lerp(float3(1.0, 1.0, 1.0), uwTint, uwBlend * 0.35);
+    }
 
     return float4(saturate(ldr), 1.0);
 }

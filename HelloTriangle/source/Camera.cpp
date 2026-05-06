@@ -68,13 +68,21 @@ void Camera::Move(float forwardDelta, float rightDelta)
 void Camera::UpdateShowcase(float deltaTime)
 {
     if (!m_showcaseMode) return;
-    m_showcaseAngle += deltaTime * 0.3f; // 旋转速度
+    m_showcaseAngle += deltaTime * 0.3f;
+
     position.x = sinf(m_showcaseAngle) * m_showcaseRadius;
     position.z = cosf(m_showcaseAngle) * m_showcaseRadius;
-    position.y = m_showcaseHeight;
 
-    // 始终看向原点（水族箱中心）
-    // 通过 pitch 和 yaw 控制方向
-    m_yaw = m_showcaseAngle + XM_PI; // 朝向原点
-    m_pitch = -atanf(m_showcaseHeight / m_showcaseRadius); // 俯角
+    // Compound vertical oscillation
+    //   slow dive  (~60s cycle): large amplitude, occasionally dips below surface
+    //   med swell  (~19s cycle): mid ocean swell
+    //   small chop  (~7s cycle): surface chop feel
+    float slowDive  = sinf(m_showcaseAngle * 0.35f) *  8.0f;
+    float medSwell  = sinf(m_showcaseAngle * 1.10f) *  2.5f;
+    float smallChop = sinf(m_showcaseAngle * 2.80f) *  0.8f;
+    position.y = m_showcaseHeight + slowDive + medSwell + smallChop;
+    // range: [5-8-2.5-0.8, 5+8+2.5+0.8] = [-6.3, 16.3] m
+
+    m_yaw   = m_showcaseAngle + XM_PI;
+    m_pitch = -atanf(position.y / m_showcaseRadius); // look toward origin
 }
