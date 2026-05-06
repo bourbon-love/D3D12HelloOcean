@@ -57,7 +57,8 @@ cbuffer RippleCB : register(b1)
 Texture2D<float4> g_heightMap   : register(t0);
 Texture2D<float4> g_dztMap      : register(t1);
 Texture2D<float4> g_skySnapshot : register(t2);
-Texture2D<float>  g_shadowMap   : register(t3); // 浮遊物体のシャドウマップ
+Texture2D<float>  g_shadowMap   : register(t3);
+Texture2D<float4> g_refraction  : register(t4); // 空＋水下物体（屈折用）
 SamplerState g_sampler : register(s0);
 
 cbuffer ShadowCB : register(b2)
@@ -67,6 +68,11 @@ cbuffer ShadowCB : register(b2)
     float    shadowStrength;
     float    shadowEnabled;
     float    pad_shadow;
+    float    screenW;
+    float    screenH;
+    float    waterBodyStr;   // water body color multiplier
+    float    waterRefract;   // refraction UV distortion
+    float    waterMinTrans;  // min transmission at grazing
 };
 
 
@@ -325,13 +331,13 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     float fresnel = F0 + (1.0f - F0) * pow(1.0f - NdotV, 5.0f);
     float3 reflectDir = reflect(-V, N);
 
-    // SSR：法線で反射UVをわずかに揺らして粗さを模倣
-    float3 reflectColor;
+    // ---- 反射サンプル（フレネル未適用、後で合成）----
+    float3 reflectSample;
     {
         float4x4 vp = mul(view, proj);
         float4 reflClip = mul(float4(pin.posW + reflectDir * 300.0, 1.0), vp);
         float2 reflUV = reflClip.xy / reflClip.w * float2(0.5, -0.5) + 0.5;
-        reflUV += N.xz * 0.018;   // 法線による微小揺らぎ（粗面反射）
+        reflUV += N.xz * 0.018;
         reflUV = saturate(reflUV);
 
         float2 edgeFade = saturate(min(reflUV, 1.0 - reflUV) * 6.0);
@@ -341,28 +347,45 @@ float4 PSMain(VSOutput pin) : SV_TARGET
 
         float3 ssrSample  = g_skySnapshot.SampleLevel(g_sampler, reflUV, 0).rgb;
         float3 procSample = SampleSkyReflection(reflectDir);
-        // 夜間は反射輝度を大幅に下げる（sunIntensity=0で約5%の輝度）
-        float reflBright = lerp(0.10, 2.0, saturate(sunIntensity * 1.8));
-        reflectColor = lerp(procSample, ssrSample, fade) * fresnel * reflBright;
+        float  reflBright = lerp(0.10, 2.0, saturate(sunIntensity * 1.8));
+        reflectSample = lerp(procSample, ssrSample, fade) * reflBright;
     }
 
-    float3 color = diffuse + specularColor + reflectColor;
-
-    // --- 次表面散乱（SSS）：波頂部の透過光 ---
-    // 太陽光が薄い波峰を透過するときの青緑色の輝き
-    // 太陽に向かって見るとき（逆光）に最も顕著に現れる
+    // ---- 透過色（Beer-Lambert 水体吸収 + 屈折ゆらぎ）----
+    float3 transmitted;
     {
-        float3 sssDir   = normalize(-sunDir + N * 0.5);
-        float  sssView  = pow(saturate(dot(V, sssDir)), 4.0);
-        // 波高が高いほど（波頂部）薄い水層を光が通り抜ける
-        float  sssCrest = saturate(pin.posW.y * 0.18 + 0.2);
-        // 夜間はSSSをゼロにする。
-        // sunDirは夜間に月の方向へブレンドされるためsunDir.yは使えない。
-        // moonIntensity=0.15固定、日中のsunIntensityは0.5以上なので
-        // 0.35をしきい値として昼夜を判定する。
+        float  waterDepth  = max(0.0, 2.8 - pin.posW.y);
+        float3 absorbCoeff = float3(0.60, 0.14, 0.03);
+        float3 deepOcean   = float3(0.018, 0.22, 0.52) * waterBodyStr;
+        float  sunLit      = sunIntensity * 0.55 + 0.12;
+        float3 transBody   = deepOcean * exp(-absorbCoeff * waterDepth) * sunLit;
+
+        // 屈折ゆらぎ：法線でスクリーンUVを微小変位
+        // 屈折UV：refractionRT（空＋水下物体）を法線で揺らしてサンプリング
+        float2 screenUV    = pin.posH.xy * float2(1.0 / screenW, 1.0 / screenH);
+        float2 refractUV   = saturate(screenUV + N.xz * waterRefract * (1.0 - NdotV));
+        float3 refractSamp = g_refraction.SampleLevel(g_sampler, refractUV, 0).rgb;
+        // 水体吸収色と折射サンプルを混合（水深が浅いほど水下物体が透けて見える）
+        float  depthBlend  = saturate(1.0 - waterDepth * 0.18);
+        transmitted = lerp(transBody, refractSamp * exp(-absorbCoeff * waterDepth), depthBlend)
+                    + transBody * (1.0 - depthBlend);
+    }
+
+    // ---- フレネル合成：反射 + 透過 ----
+    float transWeight = waterMinTrans + (1.0 - waterMinTrans) * (1.0 - fresnel);
+    float3 color = fresnel * reflectSample
+                 + transWeight * transmitted
+                 + specularColor
+                 + diffuse * 0.30;
+
+    // --- 次表面散乱（SSS）：波頂部の透過光（逆光時に青緑に輝く） ---
+    {
+        float3 sssDir      = normalize(-sunDir + N * 0.5);
+        float  sssView     = pow(saturate(dot(V, sssDir)), 4.0);
+        float  sssCrest    = saturate(pin.posW.y * 0.18 + 0.2);
         float  sssDaylight = saturate((sunIntensity - 0.35) * 10.0);
-        float3 sssColor = float3(0.0, 0.55, 0.40) * sssView * sssCrest
-                          * min(sunIntensity, 1.5) * 1.4 * sssDaylight;
+        float3 sssColor    = float3(0.0, 0.55, 0.40) * sssView * sssCrest
+                             * min(sunIntensity, 1.5) * 1.4 * sssDaylight;
         color += sssColor;
     }
 

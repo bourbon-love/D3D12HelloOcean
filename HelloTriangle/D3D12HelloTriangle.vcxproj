@@ -73,6 +73,8 @@
       <AdditionalIncludeDirectories>%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <CompileAsWinRT>false</CompileAsWinRT>
       <LanguageStandard>stdcpp20</LanguageStandard>
+      <AdditionalOptions>/FS %(AdditionalOptions)</AdditionalOptions>
+      <DebugInformationFormat>OldStyle</DebugInformationFormat>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -155,7 +157,9 @@
     <ClCompile Include="ImGUI\imgui_impl_win32.cpp" />
     <ClCompile Include="ImGUI\imgui_widgets.cpp" />
     <ClCompile Include="source\Camera.cpp" />
+    <ClCompile Include="source\FishSchool.cpp" />
     <ClCompile Include="source\FloatingObject.cpp" />
+    <ClCompile Include="source\PostProcessPipelineImpl.cpp" />
     <ClCompile Include="source\GridMesh.cpp" />
     <ClCompile Include="source\OceanFFT.cpp" />
     <ClCompile Include="source\RainSystem.cpp" />
@@ -353,6 +357,19 @@ dxc.exe -nologo -Tps_6_0 -E"LightningPS" -O3 -Fo"$(OutDir)lightning_LightningPS.
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)lightning_LightningVS.cso;$(OutDir)lightning_LightningPS.cso</Outputs>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling lightning shaders</Message>
       <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling lightning shaders</Message>
+    </CustomBuild>
+    <CustomBuild Include="shaders\fish.hlsl">
+      <FileType>Document</FileType>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">true</DeploymentContent>
+      <DeploymentContent Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</DeploymentContent>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">dxc.exe -nologo -Tvs_6_0 -E"FishVS" -Zi -Qembed_debug -Fo"$(OutDir)fish_FishVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"FishPS" -Zi -Qembed_debug -Fo"$(OutDir)fish_FishPS.cso" "%(FullPath)"</Command>
+      <Command Condition="'$(Configuration)|$(Platform)'=='Release|x64'">dxc.exe -nologo -Tvs_6_0 -E"FishVS" -O3 -Fo"$(OutDir)fish_FishVS.cso" "%(FullPath)"
+dxc.exe -nologo -Tps_6_0 -E"FishPS" -O3 -Fo"$(OutDir)fish_FishPS.cso" "%(FullPath)"</Command>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">$(OutDir)fish_FishVS.cso;$(OutDir)fish_FishPS.cso</Outputs>
+      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)fish_FishVS.cso;$(OutDir)fish_FishPS.cso</Outputs>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling fish shaders</Message>
+      <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling fish shaders</Message>
     </CustomBuild>
     <CustomBuild Include="shaders\floating_object.hlsl">
       <FileType>Document</FileType>

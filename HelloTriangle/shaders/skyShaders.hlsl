@@ -29,6 +29,10 @@ cbuffer SkyCB : register(b0)
     float cloudDriftX;   // wind X * speed — applied as per-frame cloud position offset
     float cloudDriftY;   // wind Z * speed
     float padLightning;
+    float cameraY;       // world Y of camera (negative = underwater)
+    float padCam1;
+    float padCam2;
+    float padCam3;
 };
 
 struct VSInput
@@ -326,21 +330,30 @@ float4 skyPS(VSOutput input) : SV_Target
     float flicker = lightningIntensity * (0.8 + 0.2 * sin(time * 50.0));
     skyColor.rgb += float3(0.85, 0.92, 1.0) * flicker * 3.0;
 
+    // 地平線以下の日月を完全に抑制（カメラ位置に関係なく、太陽/月がy<0なら不可視）
+    // smoothstep で地平線付近を自然に遷移させる
+    float sunVis  = smoothstep(-0.04, 0.06, sunPosition.y);
+    float moonVis = smoothstep(-0.04, 0.06, moonPosition.y);
+
+    // 水中カメラの追加抑制（カメラが水面下のとき、さらに弱める）
+    float uwCamSky = saturate(-cameraY / 2.0);
+
     // 3. 太陽光輝（夜間暗化の後に重ねる）
     float3 sunDir = sunPosition.xyz;
     float sunDot = max(0.0f, dot(normalizedPos, sunDir));
     // 太陽ディスクコア（HDR高輝度。ACESで圧縮される）
     float sunDisk = pow(sunDot, 2048.0f) * 20.0f;
-    skyColor.rgb += float3(1.0f, 0.95f, 0.8f) * sunDisk;
+    skyColor.rgb += float3(1.0f, 0.95f, 0.8f) * sunDisk * sunVis;
 
     // 太陽ハロー
     float sunHalo = pow(sunDot, 256.0f) * 5.0f;
-    skyColor.rgb += sunColor * sunHalo;
+    skyColor.rgb += sunColor * sunHalo * sunVis;
 
-    // 大気散乱：太陽が地平線近くにあるとき、広いオレンジレッドグローを追加
+    // 大気散乱：地平線以下では残光のみ（sunVisで減衰、夕焼けの余韻を保つ）
     float sunNearHorizon = saturate(1.0f - abs(sunPosition.y) * 5.0f);
     float atmScatter = pow(sunDot, 4.0f) * sunNearHorizon * 2.5f;
-    skyColor.rgb += float3(1.1f, 0.42f, 0.04f) * atmScatter;
+    skyColor.rgb += float3(1.1f, 0.42f, 0.04f) * atmScatter * sunVis;
+
     // 4. 月牙（夜間暗化の影響を受けない）
     float3 moonDir = moonPosition.xyz;
     float moonDot = max(0.0f, dot(normalizedPos, moonDir));
@@ -353,11 +366,11 @@ float4 skyPS(VSOutput input) : SV_Target
     float moonBody    = pow(moonDot,    moonBodyPow);
     float moonOcclude = pow(crescentDot, moonOccludePow);
     float moonCrescent = saturate(moonBody - moonOcclude * 2.0f);
-    skyColor.rgb += float3(1.0f, 1.0f, 0.95f) * moonCrescent * 18.0f;
+    skyColor.rgb += float3(1.0f, 1.0f, 0.95f) * moonCrescent * 18.0f * moonVis;
 
     // ハロー
     float moonHalo = pow(moonDot, 100.0f) * 1.2f;
-    skyColor.rgb += float3(0.3f, 0.4f, 0.8f) * moonHalo;
+    skyColor.rgb += float3(0.3f, 0.4f, 0.8f) * moonHalo * moonVis;
 
     // 5. 雲
     float baseHeight = normalizedPos.y;
@@ -442,6 +455,25 @@ float4 skyPS(VSOutput input) : SV_Target
         // 夜間は暗くする
         cirrusCol = lerp(cirrusCol, cirrusCol * 0.15, nightSky * 0.8);
         skyColor.rgb = lerp(skyColor.rgb, cirrusCol, cirrus * 0.55);
+    }
+
+    // 7. 水中カメラ補正
+    if (uwCamSky > 0.001)
+    {
+        // 下半球（水平以下方向）を暗い深海色で置換
+        float lookDown = saturate((-normalizedPos.y + 0.05) / 0.20);
+        float3 deepColor = float3(0.01, 0.06, 0.14);
+        skyColor.rgb = lerp(skyColor.rgb, deepColor, lookDown * uwCamSky);
+
+        // 上半球（水面方向）を青緑でティント（水越しに見る空）
+        float lookUp = saturate(normalizedPos.y / 0.25);
+        skyColor.rgb = lerp(skyColor.rgb,
+            skyColor.rgb * float3(0.35, 0.70, 1.00),
+            lookUp * uwCamSky * 0.55);
+
+        // 水平線付近に内部全反射の明るい帯を追加
+        float horizon = exp(-abs(normalizedPos.y) * 10.0) * 0.4 * uwCamSky;
+        skyColor.rgb += float3(0.04, 0.18, 0.38) * horizon;
     }
 
     return skyColor;

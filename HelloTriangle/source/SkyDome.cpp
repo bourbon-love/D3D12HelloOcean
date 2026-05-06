@@ -339,6 +339,8 @@ void SkyDome::Render(RenderContext& ctx)
     cb.cloudDriftX  = m_windDirX * windStrength * 0.08f;
     cb.cloudDriftY  = m_windDirY * windStrength * 0.08f;
     cb.padLightning = 0.0f;
+    cb.cameraY      = m_cameraY;
+    cb.padCam1 = cb.padCam2 = cb.padCam3 = 0.0f;
     memcpy(m_cbMapped, &cb, sizeof(cb));
 
     // 天空PSOに切り替える

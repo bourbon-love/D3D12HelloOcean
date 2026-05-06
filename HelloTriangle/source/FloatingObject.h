@@ -36,6 +36,14 @@ public:
         XMFLOAT3 sunDir, float sunIntensity, XMFLOAT3 sunColor,
         XMFLOAT3 cameraPos);
 
+    // Underwater boxes (rendered before ocean surface for refraction)
+    void SpawnUnderwaterBox();
+    void ClearUnderwaterBoxes() { m_uwBoxes.clear(); }
+    int  GetUnderwaterBoxCount() const { return (int)m_uwBoxes.size(); }
+    void RenderUnderwater(RenderContext& ctx,
+                          XMFLOAT3 sunDir, float sunIntensity,
+                          XMFLOAT3 sunColor, XMFLOAT3 cameraPos);
+
     // Shadow depth pass
     void InitShadowResources(ID3D12Device* device);
     void RenderDepth(ID3D12GraphicsCommandList* cmd,
@@ -45,7 +53,8 @@ public:
 
     float scale = 1.8f;
 
-    static constexpr int MAX_BOXES = 20;
+    static constexpr int MAX_BOXES    = 20;
+    static constexpr int MAX_UW_BOXES = 10;
 
 private:
     struct Vertex { XMFLOAT3 pos; XMFLOAT3 normal; };
@@ -72,7 +81,9 @@ private:
     static constexpr float SPAWN_HEIGHT  = 45.0f;
     static constexpr float SPAWN_RADIUS  = 120.0f;
 
+    struct UwBox { XMFLOAT3 pos; };   // fixed underwater position (y < 0)
     std::vector<BoxInstance>     m_boxes;
+    std::vector<UwBox>           m_uwBoxes;
     ComPtr<ID3D12Device>         m_device;
     ComPtr<ID3D12Resource>       m_vb, m_vbUpload;
     ComPtr<ID3D12Resource>       m_ib, m_ibUpload;
