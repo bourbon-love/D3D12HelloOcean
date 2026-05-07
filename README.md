@@ -2,7 +2,7 @@
 
 A real-time ocean renderer built from scratch with DirectX 12 and C++20. The ocean surface is simulated entirely on the GPU using Fast Fourier Transform (FFT) based on the Phillips spectrum, combined with Gerstner waves, a full post-processing pipeline, and dynamic weather.
 
-> **Demo video:** <!-- YouTube link here -->  
+> **Demo video:** <-- https://youtu.be/7AlJAtE4OF4 -->  
 > **Build:** Visual Studio 2022 · DirectX 12 · C++20 · Windows 10/11
 
 ---
