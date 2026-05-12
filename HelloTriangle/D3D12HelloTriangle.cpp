@@ -634,6 +634,7 @@ void D3D12HelloTriangle::WaitForPreviousFrame()
 
 void D3D12HelloTriangle::OnKeyDown(UINT8 key)
 {
+    if (key == VK_F11) Win32Application::ToggleFullscreen();
     if (key == VK_TAB) m_renderer->ToggleWireframe();
 
     if (key == 'V')
