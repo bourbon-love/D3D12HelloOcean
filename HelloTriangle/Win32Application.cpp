@@ -14,9 +14,11 @@
 #include "ImGUI/imgui_impl_win32.h"
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
-HWND Win32Application::m_hwnd = nullptr;
-POINT Win32Application::m_lastMousePos = {};  
-bool  Win32Application::m_mouseTracking = false;
+HWND             Win32Application::m_hwnd          = nullptr;
+POINT            Win32Application::m_lastMousePos  = {};
+bool             Win32Application::m_mouseTracking = false;
+bool             Win32Application::m_fullscreen    = false;
+WINDOWPLACEMENT  Win32Application::m_savedPlacement = { sizeof(WINDOWPLACEMENT) };
 
 int Win32Application::Run(DXSample* pSample, HINSTANCE hInstance, int nCmdShow)
 {
@@ -169,4 +171,32 @@ LRESULT CALLBACK Win32Application::WindowProc(HWND hWnd, UINT message, WPARAM wP
 
     // Handle any messages the switch statement didn't.
     return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+void Win32Application::ToggleFullscreen()
+{
+    m_fullscreen = !m_fullscreen;
+    HWND hwnd = m_hwnd;
+
+    if (m_fullscreen)
+    {
+        GetWindowPlacement(hwnd, &m_savedPlacement);
+        LONG style = GetWindowLong(hwnd, GWL_STYLE);
+        SetWindowLong(hwnd, GWL_STYLE, style & ~WS_OVERLAPPEDWINDOW);
+
+        MONITORINFO mi = { sizeof(mi) };
+        GetMonitorInfo(MonitorFromWindow(hwnd, MONITOR_DEFAULTTOPRIMARY), &mi);
+        SetWindowPos(hwnd, HWND_TOP,
+            mi.rcMonitor.left, mi.rcMonitor.top,
+            mi.rcMonitor.right  - mi.rcMonitor.left,
+            mi.rcMonitor.bottom - mi.rcMonitor.top,
+            SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
+    else
+    {
+        SetWindowLong(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW);
+        SetWindowPlacement(hwnd, &m_savedPlacement);
+        SetWindowPos(hwnd, nullptr, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER | SWP_FRAMECHANGED);
+    }
 }

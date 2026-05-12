@@ -406,13 +406,20 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     // 上向き面のみに泡沫を制限（波の側面に貼り付かないよう）
     float topFace = saturate((N.y - 0.45) / 0.55);
 
-    // FBMノイズ（3オクターブ）：高周波 + smoothstepで大まかな迷彩ブロブを除去
-    float2 fuv  = pin.uv * 95.0 + float2(time * 0.10, time * 0.06);
+    // 風向に沿った泡沫ストリーク UV
+    // 波方向に引き伸ばし（4:1比率）、直交方向に縞模様を生成
+    float2 waveDir2D = normalize(waveDir0);
+    float2 perpDir2D = float2(-waveDir2D.y, waveDir2D.x);
+    float2 worldXZ   = pin.uv * FFT_TILE_SIZE;
+    float  alongAxis = dot(worldXZ, waveDir2D);
+    float  perpAxis  = dot(worldXZ, perpDir2D);
+    // 波方向に伸びたストリーク座標系（沿方向: 1/4スケール → 長いスジ）
+    float2 foamUVBase = float2(perpAxis * 0.25f, alongAxis * 0.065f);
+    float2 fuv  = foamUVBase + float2(time * 0.10f, time * 0.06f);
     float  fn1  = valueNoise(fuv);
     float  fn2  = valueNoise(fuv * 3.2 + float2(5.1, 1.9));
     float  fn3  = valueNoise(fuv * 7.5 + float2(2.3, 4.7));
     float  fbm  = fn1 * 0.50 + fn2 * 0.32 + fn3 * 0.18;
-    // smoothstepで閾値化：滑らかな塊をシャープなストリークに変換
     float  foamNoise = smoothstep(0.30, 0.68, fbm);
 
     float foamMask = saturate(rawFoam * topFace * (0.15 + foamNoise * 1.6));
