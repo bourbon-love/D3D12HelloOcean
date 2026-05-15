@@ -5,8 +5,8 @@
 
 using namespace DirectX;
 
-// 顶点格式：位置 + UV
-// 去掉了Color，改成UV，为后续法线贴图和波浪采样做准备
+// Vertex format: position + UV
+// Removed Color, replaced with UV, in preparation for normal mapping and wave sampling
 struct GridVertex
 {
     XMFLOAT3 position;
@@ -16,12 +16,12 @@ struct GridVertex
 struct GridMeshData
 {
     std::vector<GridVertex> vertices;
-    std::vector<uint32_t>   indices;   // 改成uint32，32x32以上顶点数会超uint16上限
+    std::vector<uint32_t>   indices;   // Changed to uint32; vertex count above 32x32 exceeds uint16 limit
 };
 
-// 生成平坦网格
-// rows/cols : 分段数，实际顶点数是(rows+1)*(cols+1)
-// size      : 网格总尺寸，以世界坐标为单位，网格居中于原点
+// Generate a flat grid
+// rows/cols : subdivision count; actual vertex count is (rows+1)*(cols+1)
+// size      : total grid size in world units, centered at origin
 GridMeshData GenerateGrid(UINT rows, UINT cols, float size);
-// 生成水箱侧面和底面
+// Generate water box sides and bottom face
 GridMeshData GenerateWaterBox(float size, float depth);

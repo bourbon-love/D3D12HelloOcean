@@ -15,6 +15,9 @@
 _Use_decl_annotations_
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow)
 {
+    // 物理ピクセルで全Win32 APIを動作させる（DPIスケーリング仮想化を無効化）
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
     D3D12HelloTriangle sample(1920, 1080, L"D3D12HelloOcean - Gerstner Wave");
     return Win32Application::Run(&sample, hInstance, nCmdShow);
 }

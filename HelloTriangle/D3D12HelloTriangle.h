@@ -21,6 +21,7 @@
 #include "source/FloatingObject.h"
 #include "source/FishSchool.h"
 #include "source/PostProcessPipeline.h"
+#include "source/VolumetricClouds.h"
 #include "ImGUI/imgui.h"
 #include "ImGUI/imgui_impl_win32.h"
 #include "ImGUI/imgui_impl_dx12.h"
@@ -51,7 +52,8 @@ private:
     std::unique_ptr<RainSystem>         m_rainSystem;
     std::unique_ptr<FloatingObject>     m_floatingObject;
     std::unique_ptr<FishSchool>         m_fishSchool;
-    std::unique_ptr<PostProcessPipeline> m_pp;
+    std::unique_ptr<PostProcessPipeline>  m_pp;
+    std::unique_ptr<VolumetricClouds>     m_volumetricClouds;
 
     std::chrono::steady_clock::time_point m_lastTime;
 

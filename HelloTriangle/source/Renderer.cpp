@@ -20,7 +20,7 @@ void Renderer::InitPSO(
     m_rootSignature = rootSignature;
     m_camera.aspect = static_cast<float>(width) / static_cast<float>(height);
 
-    // バイトコードを保存する
+    // Save shader bytecode
     m_vertexShaderData.assign(vsData, vsData + vsSize);
     m_pixelShaderData.assign(psData, psData + psSize);
 
@@ -39,7 +39,7 @@ void Renderer::InitPSO(
             0, &readRange, reinterpret_cast<void**>(&m_pCbvDataBegin)));
     }
 
-    // 入力レイアウト
+    // Input layout
     D3D12_INPUT_ELEMENT_DESC inputElementDescs[] =
     {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
@@ -48,9 +48,9 @@ void Renderer::InitPSO(
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
-    // 実体PSO
+    // Solid PSO (double-sided: camera may view ocean surface from below when underwater)
     {
-        
+
         D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
         psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
         psoDesc.pRootSignature = m_rootSignature.Get();
@@ -58,7 +58,9 @@ void Renderer::InitPSO(
             m_vertexShaderData.data(), m_vertexShaderData.size());
         psoDesc.PS = CD3DX12_SHADER_BYTECODE(
             m_pixelShaderData.data(), m_pixelShaderData.size());
-        psoDesc.RasterizerState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
+        CD3DX12_RASTERIZER_DESC rasterDesc(D3D12_DEFAULT);
+        rasterDesc.CullMode = D3D12_CULL_MODE_NONE;
+        psoDesc.RasterizerState = rasterDesc;
         psoDesc.BlendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
         psoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
         psoDesc.DSVFormat = DXGI_FORMAT_D32_FLOAT;
@@ -70,11 +72,11 @@ void Renderer::InitPSO(
         ThrowIfFailed(m_device->CreateGraphicsPipelineState(
             &psoDesc, IID_PPV_ARGS(&m_pipelineState)));
     }
-    // 半透明 PSO
+    // Translucent PSO
     {
-      
 
-        // アルファブレンドを有効にする
+
+        // Enable alpha blending
         D3D12_BLEND_DESC blendDesc = {};
         blendDesc.RenderTarget[0].BlendEnable = TRUE;
         blendDesc.RenderTarget[0].SrcBlend = D3D12_BLEND_SRC_ALPHA;
@@ -85,11 +87,11 @@ void Renderer::InitPSO(
         blendDesc.RenderTarget[0].BlendOpAlpha = D3D12_BLEND_OP_ADD;
         blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
-        // 背面カリングを無効にして両面を可視にする
+        // Disable backface culling to make both sides visible
         CD3DX12_RASTERIZER_DESC rasterDesc(D3D12_DEFAULT);
         rasterDesc.CullMode = D3D12_CULL_MODE_NONE;
 
-        // 深度テストを有効にするが書き込みは行わない（透明オブジェクトは深度を書かない）
+        // Enable depth test but disable depth writes (transparent objects do not write depth)
         CD3DX12_DEPTH_STENCIL_DESC depthDesc(D3D12_DEFAULT);
         depthDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
 
@@ -111,7 +113,7 @@ void Renderer::InitPSO(
         ThrowIfFailed(m_device->CreateGraphicsPipelineState(
             &psoDesc, IID_PPV_ARGS(&m_waterBoxPSO)));
     }
-    // ワイヤーフレームPSO
+    // Wireframe PSO
     CreateWireframePSO();
 
     // Depth Buffer
@@ -121,28 +123,59 @@ void Renderer::InitPSO(
 void Renderer::InitResources(ComPtr<ID3D12GraphicsCommandList> commandList)
 {
     m_commandList = commandList;
-    CreateGridBuffers(commandList);  // グリッドアップロードコマンドを記録する
-	CreateWaterBoxBuffers(commandList); // ウォーターボックスアップロードコマンドを記録する
-    
+    CreateGridBuffers(commandList);
+    CreateLodGridBuffers(commandList);
+    CreateWaterBoxBuffers(commandList);
 }
 
 void Renderer::Render(RenderContext& ctx)
 {
-    auto* pso = m_wireframe
-        ? m_wireframePSO.Get() : m_pipelineState.Get();
-    
+    ExtractFrustumPlanes();
+
+    int camTX = (int)floorf(m_camera.position.x / TILE_SIZE);
+    int camTZ = (int)floorf(m_camera.position.z / TILE_SIZE);
+
+    auto* pso = m_wireframe ? m_wireframePSO.Get() : m_pipelineState.Get();
     ctx.cmd->SetPipelineState(pso);
     ctx.cmd->SetGraphicsRootSignature(m_rootSignature.Get());
-    ctx.cmd->SetGraphicsRootConstantBufferView(0, m_constantBuffer->GetGPUVirtualAddress());
     ctx.cmd->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
     ctx.cmd->RSSetViewports(1, &ctx.viewport);
     ctx.cmd->RSSetScissorRects(1, &ctx.scissor);
     ctx.cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-    ctx.cmd->IASetVertexBuffers(0, 1, &ctx.vb);
-    ctx.cmd->IASetIndexBuffer(&ctx.ib);
-    ctx.cmd->DrawIndexedInstanced(ctx.indexCount, 1, 0, 0, 0);
-   
 
+    UINT slot = 0;
+    for (int tz = camTZ - TILE_RADIUS; tz <= camTZ + TILE_RADIUS && slot < CB_MAX_TILES; ++tz)
+    {
+        for (int tx = camTX - TILE_RADIUS; tx <= camTX + TILE_RADIUS && slot < CB_MAX_TILES; ++tx)
+        {
+            if (!IsTileVisible(tx, tz)) continue;
+
+            // Write CB per tile (256-byte aligned slot)
+            UINT cbOffset = slot * CB_SLOT_SIZE;
+            auto* tileCB = reinterpret_cast<SceneCB*>(m_pCbvDataBegin + cbOffset);
+            *tileCB = m_lastSceneCB;
+            tileCB->tileOffset = { tx * TILE_SIZE, tz * TILE_SIZE };
+
+            ctx.cmd->SetGraphicsRootConstantBufferView(
+                0, m_constantBuffer->GetGPUVirtualAddress() + cbOffset);
+
+            // LOD: tiles within 5x5 around camera use high-res, others use low-res
+            bool hiRes = (abs(tx - camTX) <= 2 && abs(tz - camTZ) <= 2);
+            if (hiRes)
+            {
+                ctx.cmd->IASetVertexBuffers(0, 1, &ctx.vb);
+                ctx.cmd->IASetIndexBuffer(&ctx.ib);
+                ctx.cmd->DrawIndexedInstanced(ctx.indexCount, 1, 0, 0, 0);
+            }
+            else
+            {
+                ctx.cmd->IASetVertexBuffers(0, 1, &m_lodVBView);
+                ctx.cmd->IASetIndexBuffer(&m_lodIBView);
+                ctx.cmd->DrawIndexedInstanced(m_lodIndexCount, 1, 0, 0, 0);
+            }
+            ++slot;
+        }
+    }
 }
 
 
@@ -158,7 +191,7 @@ void Renderer::Update(float deltaTime)
     //cb.pad0 = cb.pad1 = cb.pad2 = 0.0f;
 	cb.cameraPos = m_camera.position;
 
-    // 空システムからデータを読み取る
+    // Read data from the sky system
     if (m_skyDome)
     {
         cb.sunDir = m_skyDome->GetSunDirection();
@@ -167,7 +200,7 @@ void Renderer::Update(float deltaTime)
         cb.skyColor = m_skyDome->GetSkyColor();
         cb.padSky = 0.0f;
 
-        // 太陽の高さに応じて日光と月光の間で滑らかに補間する。遷移帯 sunY ∈ [-0.1, 0.1]
+        // Smoothly interpolate between sunlight and moonlight based on sun elevation. Transition band: sunY in [-0.1, 0.1]
         float sunY = m_skyDome->GetSunDirection().y;
         float dayBlend = std::clamp((sunY + 0.1f) / 0.2f, 0.0f, 1.0f);
 
@@ -188,18 +221,19 @@ void Renderer::Update(float deltaTime)
             std::lerp(moonCol.z, sunCol.z, dayBlend));
 
 
-        // 霧
+        // Fog
         {
             float weatherIntensity = m_weatherSystem ? m_weatherSystem->GetWeatherIntensity() : 0.0f;
             if (m_showcaseMode)
             {
-                cb.fogStart = 800.0f;
-                cb.fogEnd = 1200.0f;
+                cb.fogStart = 1200.0f;
+                cb.fogEnd   = 2000.0f;
             }
             else
             {
-                cb.fogStart = 280.0f - weatherIntensity * 150.0f;
-                cb.fogEnd = 380.0f - weatherIntensity * 150.0f;
+                // Infinite ocean support: hide the LOD transition line (~800m) with fog
+                cb.fogStart = 900.0f  - weatherIntensity * 300.0f;
+                cb.fogEnd   = 1600.0f - weatherIntensity * 400.0f;
             }
             cb.foamIntensity = 0.15f + weatherIntensity * 0.85f;
             cb.ssrMix = m_ssrMix;
@@ -207,7 +241,7 @@ void Renderer::Update(float deltaTime)
     }
     else
     {
-        // 空システムがない場合のデフォルト値
+        // Default values when the sky system is absent
         cb.sunDir = { 0.5f, 1.0f, 0.3f };
         cb.sunIntensity = 1.0f;
         cb.sunColor = { 1.0f, 0.95f, 0.8f };
@@ -216,13 +250,13 @@ void Renderer::Update(float deltaTime)
         cb.padSky = 0.0f;
         
     }
-    // 4つの重畳波のパラメータ
-    //               方向              振幅   波長   速度   急峻度
-    cb.waves[0] = { {1.0f,  0.0f},  0.3f,  60.0f, 1.0f, 0.06f }; 
-    cb.waves[1] = { {0.7f,  0.7f},  0.15f, 35.0f, 1.3f, 0.05f };  
-    cb.waves[2] = { {0.2f, -0.9f},  0.08f, 20.0f, 1.6f, 0.04f }; 
-    cb.waves[3] = { {-0.5f, 0.8f},  0.05f, 12.0f, 1.1f, 0.03f };  
+    //               direction         amplitude  wavelength  speed  steepness
+    cb.waves[0] = { {1.0f,  0.0f},  0.3f,  60.0f, 1.0f, 0.06f };
+    cb.waves[1] = { {0.7f,  0.7f},  0.15f, 35.0f, 1.3f, 0.05f };
+    cb.waves[2] = { {0.2f, -0.9f},  0.08f, 20.0f, 1.6f, 0.04f };
+    cb.waves[3] = { {-0.5f, 0.8f},  0.05f, 12.0f, 1.1f, 0.03f };
 
+    m_lastSceneCB = cb;
     memcpy(m_pCbvDataBegin, &cb, sizeof(cb));
 
     float speed = 0.55f;
@@ -234,7 +268,7 @@ void Renderer::Update(float deltaTime)
     if (GetAsyncKeyState('A') & 0x8000) right -= speed;
 
     m_camera.Move(forward, right);
-	// ショーケースモードで自動周回する
+	// Auto-orbit in showcase mode
     if (m_showcaseMode)
         m_camera.UpdateShowcase(deltaTime);
 }
@@ -253,9 +287,9 @@ void Renderer::ToggleWireframe()
 
 void Renderer::CreateDepthBuffer(UINT width, UINT height)
 
-// DSVヒープとデプスバッファを作成する
+// Creates the DSV heap and depth buffer
 {
-    // DSVディスクリプタヒープ
+    // DSV descriptor heap
     D3D12_DESCRIPTOR_HEAP_DESC dsvHeapDesc = {};
     dsvHeapDesc.NumDescriptors = 1;
     dsvHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
@@ -263,21 +297,21 @@ void Renderer::CreateDepthBuffer(UINT width, UINT height)
     ThrowIfFailed(m_device->CreateDescriptorHeap(
         &dsvHeapDesc, IID_PPV_ARGS(&m_dsvHeap)));
 
-    // デプスバッファリソース
+    // Depth buffer resource
     D3D12_RESOURCE_DESC depthDesc = {};
     depthDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     depthDesc.Width = width;
     depthDesc.Height = height;
     depthDesc.DepthOrArraySize = 1;
     depthDesc.MipLevels = 1;
-    depthDesc.Format = DXGI_FORMAT_R32_TYPELESS; // R32_TYPELESSを使うことでDSV(D32)とSRV(R32)の両方を作成できる
+    depthDesc.Format = DXGI_FORMAT_R32_TYPELESS; // R32_TYPELESS allows creation of both DSV(D32) and SRV(R32)
     depthDesc.SampleDesc.Count = 1;
     depthDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-    // クリア値 — GPU最適化用。毎フレームのクリア目標値をドライバーに伝える
+    // Clear value — for GPU optimization. Tells the driver the intended clear value each frame
     D3D12_CLEAR_VALUE clearValue = {};
     clearValue.Format = DXGI_FORMAT_D32_FLOAT;
-    clearValue.DepthStencil.Depth = 1.0f; // 1.0 = 最遠
+    clearValue.DepthStencil.Depth = 1.0f; // 1.0 = farthest
     clearValue.DepthStencil.Stencil = 0;
 
     auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
@@ -285,11 +319,11 @@ void Renderer::CreateDepthBuffer(UINT width, UINT height)
         &heapProp,
         D3D12_HEAP_FLAG_NONE,
         &depthDesc,
-        D3D12_RESOURCE_STATE_DEPTH_WRITE, // 初期状態は直接DEPTH_WRITE
+        D3D12_RESOURCE_STATE_DEPTH_WRITE, // Initial state is directly DEPTH_WRITE
         &clearValue,
         IID_PPV_ARGS(&m_depthBuffer)));
 
-    // ヒープのスロット0にDSVを作成する
+    // Create DSV in heap slot 0
     D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc = {};
     dsvDesc.Format = DXGI_FORMAT_D32_FLOAT;
     dsvDesc.ViewDimension = D3D12_DSV_DIMENSION_TEXTURE2D;
@@ -304,11 +338,11 @@ void Renderer::CreateDepthBuffer(UINT width, UINT height)
 
 void Renderer::CreateGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
 {
-    // グリッドを生成する（ワールド空間サイズGRID_WORLD_SIZE）
+    // Generate grid (world-space size GRID_WORLD_SIZE)
     GridMeshData grid = GenerateGrid(GRID_SIZE, GRID_SIZE, GRID_WORLD_SIZE);
     m_gridIndexCount = static_cast<UINT>(grid.indices.size());
 
-    // ---- 頂点バッファ ----
+    // ---- Vertex buffer ----
     UINT vbSize = static_cast<UINT>(
         grid.vertices.size() * sizeof(GridVertex));
 
@@ -316,26 +350,26 @@ void Renderer::CreateGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
     auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     auto vbDesc = CD3DX12_RESOURCE_DESC::Buffer(vbSize);
 
-    // デフォルトヒープ（GPU読み取り専用、最速）
+    // Default heap (GPU read-only, fastest)
     ThrowIfFailed(m_device->CreateCommittedResource(
         &defaultHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
         D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
         IID_PPV_ARGS(&m_gridVB)));
 
-    // アップロードヒープ（CPU書き込み、中継用）
+    // Upload heap (CPU-writable, used as staging)
     ThrowIfFailed(m_device->CreateCommittedResource(
         &uploadHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
         IID_PPV_ARGS(&m_gridVBUpload)));
 
-    // CPUが頂点データをアップロードヒープに書き込む
+    // CPU writes vertex data to the upload heap
     void* pData = nullptr;
     CD3DX12_RANGE readRange(0, 0);
     ThrowIfFailed(m_gridVBUpload->Map(0, &readRange, &pData));
     memcpy(pData, grid.vertices.data(), vbSize);
     m_gridVBUpload->Unmap(0, nullptr);
 
-    // GPUコピーコマンドを記録する：Upload → Default
+    // Record GPU copy command: Upload → Default
     cmdList->CopyBufferRegion(
         m_gridVB.Get(), 0, m_gridVBUpload.Get(), 0, vbSize);
 
@@ -345,12 +379,12 @@ void Renderer::CreateGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
         D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
     cmdList->ResourceBarrier(1, &vbBarrier);
 
-    // VBVを設定する
+    // Set up VBV
     m_gridVBView.BufferLocation = m_gridVB->GetGPUVirtualAddress();
     m_gridVBView.StrideInBytes = sizeof(GridVertex);
     m_gridVBView.SizeInBytes = vbSize;
 
-    // ---- インデックスバッファ ----
+    // ---- Index buffer ----
     UINT ibSize = static_cast<UINT>(
         grid.indices.size() * sizeof(uint32_t));
     auto ibDesc = CD3DX12_RESOURCE_DESC::Buffer(ibSize);
@@ -383,6 +417,95 @@ void Renderer::CreateGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
     m_gridIBView.SizeInBytes = ibSize;
 }
 
+void Renderer::CreateLodGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
+{
+    // Low-resolution grid for distant tiles (64x64)
+    GridMeshData lod = GenerateGrid(64, 64, GRID_WORLD_SIZE);
+    m_lodIndexCount = static_cast<UINT>(lod.indices.size());
+
+    auto defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+    auto uploadHeap  = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+    CD3DX12_RANGE readRange(0, 0);
+    void* pData = nullptr;
+
+    UINT vbSize = static_cast<UINT>(lod.vertices.size() * sizeof(GridVertex));
+    auto vbDesc = CD3DX12_RESOURCE_DESC::Buffer(vbSize);
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &defaultHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_lodVB)));
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &uploadHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_lodVBUpload)));
+    ThrowIfFailed(m_lodVBUpload->Map(0, &readRange, &pData));
+    memcpy(pData, lod.vertices.data(), vbSize);
+    m_lodVBUpload->Unmap(0, nullptr);
+    cmdList->CopyBufferRegion(m_lodVB.Get(), 0, m_lodVBUpload.Get(), 0, vbSize);
+    auto vbBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_lodVB.Get(), D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER);
+    cmdList->ResourceBarrier(1, &vbBarrier);
+    m_lodVBView.BufferLocation = m_lodVB->GetGPUVirtualAddress();
+    m_lodVBView.StrideInBytes  = sizeof(GridVertex);
+    m_lodVBView.SizeInBytes    = vbSize;
+
+    UINT ibSize = static_cast<UINT>(lod.indices.size() * sizeof(uint32_t));
+    auto ibDesc = CD3DX12_RESOURCE_DESC::Buffer(ibSize);
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &defaultHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,
+        D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&m_lodIB)));
+    ThrowIfFailed(m_device->CreateCommittedResource(
+        &uploadHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,
+        D3D12_RESOURCE_STATE_GENERIC_READ, nullptr, IID_PPV_ARGS(&m_lodIBUpload)));
+    ThrowIfFailed(m_lodIBUpload->Map(0, &readRange, &pData));
+    memcpy(pData, lod.indices.data(), ibSize);
+    m_lodIBUpload->Unmap(0, nullptr);
+    cmdList->CopyBufferRegion(m_lodIB.Get(), 0, m_lodIBUpload.Get(), 0, ibSize);
+    auto ibBarrier = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_lodIB.Get(), D3D12_RESOURCE_STATE_COMMON,
+        D3D12_RESOURCE_STATE_INDEX_BUFFER);
+    cmdList->ResourceBarrier(1, &ibBarrier);
+    m_lodIBView.BufferLocation = m_lodIB->GetGPUVirtualAddress();
+    m_lodIBView.Format         = DXGI_FORMAT_R32_UINT;
+    m_lodIBView.SizeInBytes    = ibSize;
+}
+
+void Renderer::ExtractFrustumPlanes()
+{
+    XMMATRIX vp = m_camera.GetViewMatrix() * m_camera.GetProjMatrix();
+    XMFLOAT4X4 m;
+    XMStoreFloat4x4(&m, vp);
+
+    // Gribb-Hartmann method: extract clip planes from row vectors x VP matrix
+    m_frustumPlanes[0] = { m._11+m._14, m._21+m._24, m._31+m._34, m._41+m._44 }; // Left
+    m_frustumPlanes[1] = { m._14-m._11, m._24-m._21, m._34-m._31, m._44-m._41 }; // Right
+    m_frustumPlanes[2] = { m._12+m._14, m._22+m._24, m._32+m._34, m._42+m._44 }; // Bottom
+    m_frustumPlanes[3] = { m._14-m._12, m._24-m._22, m._34-m._32, m._44-m._42 }; // Top
+    m_frustumPlanes[4] = { m._13,       m._23,       m._33,       m._43       }; // Near
+    m_frustumPlanes[5] = { m._14-m._13, m._24-m._23, m._34-m._33, m._44-m._43 }; // Far
+}
+
+bool Renderer::IsTileVisible(int tx, int tz) const
+{
+    // Grid is centered in local space at [-TILE_SIZE/2, +TILE_SIZE/2]
+    // World range = tileOffset ± TILE_SIZE/2
+    float half  = TILE_SIZE * 0.5f;
+    float minX  = tx * TILE_SIZE - half, maxX = tx * TILE_SIZE + half;
+    float minZ  = tz * TILE_SIZE - half, maxZ = tz * TILE_SIZE + half;
+    constexpr float minY = -40.0f, maxY = 40.0f;
+
+    // Expand frustum bounds by TILE_SIZE/2 to prevent edge popping
+    constexpr float CULL_BIAS = TILE_SIZE * 0.5f;
+    for (const auto& p : m_frustumPlanes)
+    {
+        float dx = (p.x > 0.0f) ? maxX : minX;
+        float dy = (p.y > 0.0f) ? maxY : minY;
+        float dz = (p.z > 0.0f) ? maxZ : minZ;
+        if (p.x * dx + p.y * dy + p.z * dz + p.w < -CULL_BIAS)
+            return false;
+    }
+    return true;
+}
+
 
 void Renderer::CreateWireframePSO()
 {
@@ -395,14 +518,14 @@ void Renderer::CreateWireframePSO()
     };
 
     CD3DX12_RASTERIZER_DESC rasterDesc(D3D12_DEFAULT);
-    rasterDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;  // ワイヤーフレーム
-    rasterDesc.CullMode = D3D12_CULL_MODE_NONE;       // 背面カリングを無効にする
+    rasterDesc.FillMode = D3D12_FILL_MODE_WIREFRAME;  // Wireframe
+    rasterDesc.CullMode = D3D12_CULL_MODE_NONE;       // Disable backface culling
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = { inputElementDescs, _countof(inputElementDescs) };
     psoDesc.pRootSignature = m_rootSignature.Get();
 
-    // 保存済みのバイトコードを再利用する。実体PSOと同じシェーダーセットを使用する
+    // Reuse saved bytecode. Uses the same shader set as the solid PSO
     psoDesc.VS = CD3DX12_SHADER_BYTECODE(
         m_vertexShaderData.data(), m_vertexShaderData.size());
     psoDesc.PS = CD3DX12_SHADER_BYTECODE(
@@ -435,7 +558,7 @@ void Renderer::CreateWaterBoxBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
     auto defaultHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
     auto uploadHeap = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
 
-    // 頂点バッファ
+    // Vertex buffer
     auto vbDesc = CD3DX12_RESOURCE_DESC::Buffer(vbSize);
     ThrowIfFailed(m_device->CreateCommittedResource(
         &defaultHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
@@ -462,7 +585,7 @@ void Renderer::CreateWaterBoxBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
     m_boxVBView.StrideInBytes = sizeof(GridVertex);
     m_boxVBView.SizeInBytes = vbSize;
 
-    // インデックスバッファ
+    // Index buffer
     auto ibDesc = CD3DX12_RESOURCE_DESC::Buffer(ibSize);
     ThrowIfFailed(m_device->CreateCommittedResource(
         &defaultHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,

@@ -8,7 +8,7 @@
 #include <algorithm>
 
 // ============================================================
-// ヘルパー
+// Helpers
 // ============================================================
 D3D12_CPU_DESCRIPTOR_HANDLE PostProcessPipeline::RTV(UINT rel) const
 {
@@ -58,7 +58,7 @@ void PostProcessPipeline::Init(
 }
 
 // ============================================================
-// Init – Phase 2（シーンリソース依存）
+// Init – Phase 2 (depends on scene resources)
 // ============================================================
 void PostProcessPipeline::InitSceneResources(
     ID3D12Resource* depthBuffer,
@@ -77,7 +77,7 @@ void PostProcessPipeline::InitSceneResources(
 // ============================================================
 void PostProcessPipeline::InitBloom()
 {
-    // Bloom RT x2（slot 0,1）
+    // Bloom RT x2 (slots 0, 1)
     {
         auto hp  = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
         auto rd  = CD3DX12_RESOURCE_DESC::Tex2D(
@@ -94,7 +94,7 @@ void PostProcessPipeline::InitBloom()
         m_device->CreateRenderTargetView(m_bloomBlurRT.Get(),    nullptr, RTV(1));
     }
 
-    // SRV ヒープ: [0]=hdrRT [1]=extract [2]=blur [3]=godRay [4]=ssaoBlur
+    // SRV heap: [0]=hdrRT [1]=extract [2]=blur [3]=godRay [4]=ssaoBlur
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd = {};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -105,7 +105,7 @@ void PostProcessPipeline::InitBloom()
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
-    // Extract/Blur SRV（slot 1,2）
+    // Extract/Blur SRV (slots 1, 2)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
         sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -120,7 +120,7 @@ void PostProcessPipeline::InitBloom()
                 2, m_bloomSRVIncrSize));
     }
 
-    // Bloom ルートシグネチャ: [0] SRV t0, [1] 4定数
+    // Bloom root signature: [0] SRV t0, [1] 4 constants
     {
         CD3DX12_ROOT_PARAMETER params[2];
         CD3DX12_DESCRIPTOR_RANGE sr;
@@ -171,7 +171,7 @@ void PostProcessPipeline::InitBloom()
 // ============================================================
 void PostProcessPipeline::InitHDR()
 {
-    // HDR RT（slot 2）
+    // HDR RT (slot 2)
     {
         auto hp  = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
         auto rd  = CD3DX12_RESOURCE_DESC::Tex2D(
@@ -195,7 +195,7 @@ void PostProcessPipeline::InitHDR()
             m_bloomSRVHeap->GetCPUDescriptorHandleForHeapStart());
     }
 
-    // ToneMap ルートシグネチャ: [0] 2-SRV(t0,t1) [1] 2-SRV(t2,t3) [2] 12定数
+    // ToneMap root signature: [0] 2-SRV(t0,t1) [1] 2-SRV(t2,t3) [2] 12 constants
     {
         CD3DX12_ROOT_PARAMETER params[3];
         CD3DX12_DESCRIPTOR_RANGE sr1, sr2;
@@ -249,7 +249,7 @@ void PostProcessPipeline::InitGodRays()
 {
     UINT grW = m_width / 2, grH = m_height / 2;
 
-    // GodRay RT（slot 3）
+    // GodRay RT (slot 3)
     {
         auto hp  = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
         auto rd  = CD3DX12_RESOURCE_DESC::Tex2D(
@@ -274,7 +274,7 @@ void PostProcessPipeline::InitGodRays()
                 3, m_bloomSRVIncrSize));
     }
 
-    // ルートシグネチャ: [0] SRV t0, [1] 6定数
+    // Root signature: [0] SRV t0, [1] 6 constants
     {
         CD3DX12_ROOT_PARAMETER params[2];
         CD3DX12_DESCRIPTOR_RANGE sr;
@@ -374,7 +374,7 @@ void PostProcessPipeline::InitLensFlare()
 // ============================================================
 void PostProcessPipeline::InitDOF(ID3D12Resource* depthBuffer)
 {
-    // DOF RT（slot 4）
+    // DOF RT (slot 4)
     {
         auto hp  = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
         auto rd  = CD3DX12_RESOURCE_DESC::Tex2D(
@@ -389,7 +389,7 @@ void PostProcessPipeline::InitDOF(ID3D12Resource* depthBuffer)
 
     m_depthBuffer = depthBuffer;
 
-    // DOF SRV ヒープ: [0]=hdrRT [1]=depth
+    // DOF SRV heap: [0]=hdrRT [1]=depth
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd = {};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -414,7 +414,7 @@ void PostProcessPipeline::InitDOF(ID3D12Resource* depthBuffer)
                 m_dofSRVHeap->GetCPUDescriptorHandleForHeapStart(), 1, m_dofSRVIncrSize));
     }
 
-    // ルートシグネチャ: [0] 2-SRV, [1] 4定数
+    // Root signature: [0] 2-SRV, [1] 4 constants
     {
         CD3DX12_ROOT_PARAMETER params[2];
         CD3DX12_DESCRIPTOR_RANGE sr;
@@ -493,7 +493,7 @@ void PostProcessPipeline::InitSSR(ID3D12Resource* heightMap, ID3D12Resource* dzt
             D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
-    // slot 0,1: FFT マップ
+    // slots 0, 1: FFT maps
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
         sd.Format                  = DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -533,7 +533,7 @@ void PostProcessPipeline::InitTAA()
     auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
     D3D12_CLEAR_VALUE cv = {}; cv.Format = fmt;
 
-    // taaRT（slot 5）
+    // taaRT (slot 5)
     {
         auto rd  = CD3DX12_RESOURCE_DESC::Tex2D(fmt, m_width, m_height, 1, 1);
         rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
@@ -543,7 +543,7 @@ void PostProcessPipeline::InitTAA()
         m_device->CreateRenderTargetView(m_taaRT.Get(), nullptr, RTV(5));
     }
 
-    // taaHistoryRT（slot 6）
+    // taaHistoryRT (slot 6)
     {
         auto rd  = CD3DX12_RESOURCE_DESC::Tex2D(fmt, m_width, m_height, 1, 1);
         rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
@@ -553,7 +553,7 @@ void PostProcessPipeline::InitTAA()
         m_device->CreateRenderTargetView(m_taaHistoryRT.Get(), nullptr, RTV(6));
     }
 
-    // TAA SRV ヒープ: [0]=hdrRT [1]=taaHistoryRT
+    // TAA SRV heap: [0]=hdrRT [1]=taaHistoryRT
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd = {};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -576,7 +576,7 @@ void PostProcessPipeline::InitTAA()
                 m_taaSRVHeap->GetCPUDescriptorHandleForHeapStart(), 1, m_taaSRVIncrSize));
     }
 
-    // TAA ルートシグネチャ: [0] 2-SRV, [1] 4定数
+    // TAA root signature: [0] 2-SRV, [1] 4 constants
     {
         CD3DX12_ROOT_PARAMETER params[2];
         CD3DX12_DESCRIPTOR_RANGE sr;
@@ -633,7 +633,7 @@ void PostProcessPipeline::InitSSAO(ID3D12Resource* depthBuffer)
     auto fmt = DXGI_FORMAT_R16_FLOAT;
     D3D12_CLEAR_VALUE cv = {}; cv.Format = fmt;
 
-    // ssaoRT（slot 7）
+    // ssaoRT (slot 7)
     {
         auto rd  = CD3DX12_RESOURCE_DESC::Tex2D(fmt, hw, hh, 1, 1);
         rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
@@ -643,7 +643,7 @@ void PostProcessPipeline::InitSSAO(ID3D12Resource* depthBuffer)
         m_device->CreateRenderTargetView(m_ssaoRT.Get(), nullptr, RTV(7));
     }
 
-    // ssaoBlurRT（slot 8）
+    // ssaoBlurRT (slot 8)
     {
         auto rd  = CD3DX12_RESOURCE_DESC::Tex2D(fmt, hw, hh, 1, 1);
         rd.Flags = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
@@ -653,7 +653,7 @@ void PostProcessPipeline::InitSSAO(ID3D12Resource* depthBuffer)
         m_device->CreateRenderTargetView(m_ssaoBlurRT.Get(), nullptr, RTV(8));
     }
 
-    // SSAO SRV ヒープ: [0]=depth [1]=ssaoRT
+    // SSAO SRV heap: [0]=depth [1]=ssaoRT
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd = {};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -678,7 +678,7 @@ void PostProcessPipeline::InitSSAO(ID3D12Resource* depthBuffer)
                 m_ssaoSRVHeap->GetCPUDescriptorHandleForHeapStart(), 1, m_ssaoSRVIncrSize));
     }
 
-    // bloomSRVHeap[4] = ssaoBlurRT（ToneMap が t3 としてサンプリング）
+    // bloomSRVHeap[4] = ssaoBlurRT (sampled by ToneMap as t3)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
         sd.Format                  = DXGI_FORMAT_R16_FLOAT;
@@ -690,7 +690,7 @@ void PostProcessPipeline::InitSSAO(ID3D12Resource* depthBuffer)
                 m_bloomSRVHeap->GetCPUDescriptorHandleForHeapStart(), 4, m_bloomSRVIncrSize));
     }
 
-    // SSAO CB（256バイト）
+    // SSAO CB (256 bytes)
     {
         auto hp2 = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
         auto buf = CD3DX12_RESOURCE_DESC::Buffer(256);
@@ -716,7 +716,7 @@ void PostProcessPipeline::InitSSAO(ID3D12Resource* depthBuffer)
         m_mappedSSAOCB->bias    = 0.025f;
     }
 
-    // SSAO ルートシグネチャ: [0] CBV b0, [1] SRV t0
+    // SSAO root signature: [0] CBV b0, [1] SRV t0
     {
         CD3DX12_ROOT_PARAMETER params[2];
         params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_PIXEL);
@@ -736,7 +736,7 @@ void PostProcessPipeline::InitSSAO(ID3D12Resource* depthBuffer)
             sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&m_ssaoRootSig)));
     }
 
-    // SSAO ブラールートシグネチャ: [0] SRV t0, [1] 4定数
+    // SSAO blur root signature: [0] SRV t0, [1] 4 constants
     {
         CD3DX12_ROOT_PARAMETER params[2];
         CD3DX12_DESCRIPTOR_RANGE sr;
@@ -791,7 +791,7 @@ void PostProcessPipeline::InitSSAO(ID3D12Resource* depthBuffer)
 // ============================================================
 void PostProcessPipeline::InitShadowMap(FloatingObject* fo)
 {
-    // 2048×2048 深度テクスチャ
+    // 2048×2048 depth texture
     {
         auto hp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
         auto rd = CD3DX12_RESOURCE_DESC::Tex2D(
@@ -805,7 +805,7 @@ void PostProcessPipeline::InitShadowMap(FloatingObject* fo)
             D3D12_RESOURCE_STATE_DEPTH_WRITE, &cv, IID_PPV_ARGS(&m_shadowMap)));
     }
 
-    // DSV ヒープ
+    // DSV heap
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd = {};
         hd.Type = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
@@ -818,7 +818,7 @@ void PostProcessPipeline::InitShadowMap(FloatingObject* fo)
             m_shadowDSVHeap->GetCPUDescriptorHandleForHeapStart());
     }
 
-    // oceanSRVHeap[3] = shadowMap SRV（InitSSR の後に呼ぶこと）
+    // oceanSRVHeap[3] = shadowMap SRV (must be called after InitSSR)
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
         sd.Format                  = DXGI_FORMAT_R32_FLOAT;
@@ -843,7 +843,7 @@ void PostProcessPipeline::InitShadowMap(FloatingObject* fo)
         memset(m_mappedShadowSceneCB, 0, sizeof(ShadowSceneCB));
     }
 
-    // 深度専用ルートシグネチャ
+    // Depth-only root signature
     {
         CD3DX12_ROOT_PARAMETER param;
         param.InitAsConstantBufferView(0);
@@ -856,7 +856,7 @@ void PostProcessPipeline::InitShadowMap(FloatingObject* fo)
             sig->GetBufferPointer(), sig->GetBufferSize(), IID_PPV_ARGS(&m_shadowRootSig)));
     }
 
-    // 深度専用 PSO
+    // Depth-only PSO
     {
         UINT8* pVS = nullptr; UINT vsLen = 0;
         ThrowIfFailed(ReadDataFromFile(AssetPath(L"shadowmap_ShadowVS.cso").c_str(), &pVS, &vsLen));
@@ -1035,7 +1035,7 @@ void PostProcessPipeline::RenderShadowMap(
         fo->RenderDepth(cmd, m_shadowRootSig.Get(), m_shadowPSO.Get(), m_lightViewProj);
     }
 
-    // ShadowSceneCB を更新
+    // Update ShadowSceneCB
     auto* cb         = reinterpret_cast<ShadowSceneCB*>(m_mappedShadowSceneCB);
     cb->lightViewProj  = XMMatrixTranspose(m_lightViewProj);
     cb->shadowBias     = shadowBias;
@@ -1193,7 +1193,7 @@ void PostProcessPipeline::RenderPostProcess(
     Renderer*                   renderer,
     SkyDome*                    skyDome)
 {
-    // hdrRT を PSR へ（全 PP パスの前提）
+    // Transition hdrRT to PSR (prerequisite for all PP passes)
     {
         auto bar = CD3DX12_RESOURCE_BARRIER::Transition(m_hdrRT.Get(),
             D3D12_RESOURCE_STATE_RENDER_TARGET,
@@ -1338,7 +1338,7 @@ void PostProcessPipeline::RenderDOF(ID3D12GraphicsCommandList* cmd)
 {
     if (!dofEnabled) return;
 
-    // デプス DEPTH_WRITE → PSR
+    // Transition depth DEPTH_WRITE → PSR
     auto b0 = CD3DX12_RESOURCE_BARRIER::Transition(m_depthBuffer,
         D3D12_RESOURCE_STATE_DEPTH_WRITE, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     cmd->ResourceBarrier(1, &b0);
@@ -1361,7 +1361,7 @@ void PostProcessPipeline::RenderDOF(ID3D12GraphicsCommandList* cmd)
     cmd->ClearRenderTargetView(dofRtv, kBlack, 0, nullptr);
     cmd->DrawInstanced(3, 1, 0, 0);
 
-    // デプス PSR → DEPTH_WRITE
+    // Transition depth PSR → DEPTH_WRITE
     auto b1 = CD3DX12_RESOURCE_BARRIER::Transition(m_depthBuffer,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_DEPTH_WRITE);
     cmd->ResourceBarrier(1, &b1);
@@ -1370,7 +1370,7 @@ void PostProcessPipeline::RenderDOF(ID3D12GraphicsCommandList* cmd)
         D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     cmd->ResourceBarrier(1, &b2);
 
-    // ToneMap 入力を dofRT にリダイレクト（bloomSRVHeap slot 0）
+    // Redirect ToneMap input to dofRT (bloomSRVHeap slot 0)
     D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
     sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
     sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -1431,7 +1431,7 @@ void PostProcessPipeline::RenderTAA(ID3D12GraphicsCommandList* cmd)
         cmd->ResourceBarrier(2, bars);
     }
 
-    // bloomSRVHeap[0] を taaRT にリダイレクト
+    // Redirect bloomSRVHeap[0] to taaRT
     D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
     sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
     sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
@@ -1471,11 +1471,16 @@ void PostProcessPipeline::RenderToneMap(
     cmd->RSSetViewports(1, &m_viewport);
     cmd->RSSetScissorRects(1, &m_scissor);
 
+    float camY = renderer->GetCameraPos().y;
+    // Above water: atmospheric scattering GodRay / Underwater: underwater light shaft through Snell's window (50% intensity)
+    float aboveWater  = saturate( camY / 0.5f);
+    float underWater  = saturate(-camY / 0.5f) * 0.5f;
+    float godRayFactor = max(aboveWater, underWater);
     float params[12] = {
-        bloomStrength, exposure, godRayStrength,
+        bloomStrength, exposure, godRayStrength * godRayFactor,
         vignetteStrength, grainStrength, renderer->GetTime(),
         ssaoEnabled ? ssaoStrength : 0.0f, 0.0f,
-        renderer->GetCameraPos().y, 0.0f, 0.0f, 0.0f
+        camY, 0.0f, 0.0f, 0.0f
     };
     cmd->SetPipelineState(m_toneMappingPSO.Get());
     cmd->SetGraphicsRoot32BitConstants(2, 12, params, 0);
@@ -1484,7 +1489,7 @@ void PostProcessPipeline::RenderToneMap(
     cmd->OMSetRenderTargets(1, &swapRTV, FALSE, nullptr);
     cmd->DrawInstanced(3, 1, 0, 0);
 
-    // 全中間 RT を RT 状態へ復元
+    // Restore all intermediate RTs to the RT state
     D3D12_RESOURCE_BARRIER cleanup[3] = {
         CD3DX12_RESOURCE_BARRIER::Transition(m_hdrRT.Get(),
             D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_RENDER_TARGET),
@@ -1537,7 +1542,7 @@ void PostProcessPipeline::RenderToneMap(
         m_refractionInPSR = false;
     }
 
-    // bloomSRVHeap[0] を常に hdrRT に戻す
+    // Always restore bloomSRVHeap[0] to hdrRT
     {
         D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
         sd.Format                  = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -1560,6 +1565,7 @@ void PostProcessPipeline::RenderLensFlare(
     SkyDome*   skyDome)
 {
     if (!lensFlareEnabled) return;
+    if (renderer->GetCameraPos().y < -0.3f) return;  // hidden underwater
 
     XMFLOAT3 sd3 = skyDome->GetSunDirection();
     if (sd3.y < -0.04f) return;

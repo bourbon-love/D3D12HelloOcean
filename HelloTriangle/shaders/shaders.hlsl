@@ -1,8 +1,8 @@
 // ============================================================
 // shaders.hlsl
-// 海洋表面の頂点・ピクセルシェーダー。
-// FFT高さマップとGerstnerウェーブによる変位、Phong+Fresnelライティング、
-// ヤコビアン泡沫生成、SSRを担当する。
+// Ocean surface vertex and pixel shaders.
+// Handles FFT height map + Gerstner wave displacement, Phong+Fresnel lighting,
+// Jacobian foam generation, and SSR.
 // ============================================================
 //shaders.hlsl
 cbuffer SceneCB : register(b0)
@@ -12,18 +12,18 @@ cbuffer SceneCB : register(b0)
     float    time;
     float3 cameraPos;
 
-    float3 sunDir; // 太陽方向（正規化済み）
-    float sunIntensity; // 太陽強度：日の出・日の入り時に低下
-    float3 sunColor; // 太陽色：日の出はオレンジ寄り、正午は白寄り
+    float3 sunDir; // sun direction (normalized)
+    float sunIntensity; // sun intensity: decreases at sunrise/sunset
+    float3 sunColor; // sun color: orange at sunrise, white at noon
     float padSun;
-    float3 skyColor; // 天空主色：Fresnel反射に使用
+    float3 skyColor; // primary sky color: used for Fresnel reflection
     float padSky;
     float fogStart;
     float fogEnd;
     float foamIntensity;
     float ssrMix;
-    // 4つの波のパラメータ
-    // 各波は方向、振幅、波長、速度、ステップ、パディングを持つ
+    // Parameters for 4 waves.
+    // Each wave has direction, amplitude, wavelength, speed, steepness, and padding.
     float2 waveDir0;   float waveAmp0; float waveLen0;
     float waveSpd0;    float waveStp0; float2 wavePad0;
 
@@ -36,7 +36,8 @@ cbuffer SceneCB : register(b0)
     float2 waveDir3;   float waveAmp3; float waveLen3;
     float waveSpd3;    float waveStp3; float2 wavePad3;
 
-
+    float2 tileOffset;  // tile XZ offset (world space)
+    float2 tilePad;
 };
 
 struct RippleData
@@ -58,7 +59,7 @@ Texture2D<float4> g_heightMap   : register(t0);
 Texture2D<float4> g_dztMap      : register(t1);
 Texture2D<float4> g_skySnapshot : register(t2);
 Texture2D<float>  g_shadowMap   : register(t3);
-Texture2D<float4> g_refraction  : register(t4); // 空＋水下物体（屈折用）
+Texture2D<float4> g_refraction  : register(t4); // sky + underwater objects (for refraction)
 SamplerState g_sampler : register(s0);
 
 cbuffer ShadowCB : register(b2)
@@ -95,9 +96,9 @@ struct VSOutput
 
 };
 
-// Gerstnerウェーブ関数：波パラメータに基づいて頂点位置と法線を変形する
-// 入力：頂点のXZ位置、波方向・振幅・波長・速度・ステップ
-// 出力：変形後の変位量と接線ベクトル
+// Gerstner wave function: deforms vertex position and normal based on wave parameters.
+// Input:  vertex XZ position, wave direction, amplitude, wavelength, speed, steepness
+// Output: displacement and tangent vectors after deformation
 void GerstnerWave(
     float2 xz, float2 dir, float amp, float wavelen,
     float spd, float steep,
@@ -108,24 +109,24 @@ void GerstnerWave(
     float k = 2.0f * 3.14159265f / wavelen;
     float f = k * dot(dir, xz) - spd * time;
 
-    // Qはsteepをそのまま使用（0〜1の範囲で制御）
+    // Q uses steep directly (controlled in the 0-1 range)
 
     float Q = steep;
 
     float sinF = sin(f);
     float cosF = cos(f);
 
-    // XYZ変位
+    // XYZ displacement
     disp.x += Q * amp * dir.x * cosF;
     disp.y += amp * sinF;
     disp.z += Q * amp * dir.y * cosF;
 
-    // 接線X方向
+    // Tangent X direction
     tangentX.x += 1.0f - Q * dir.x * dir.x * k * amp * sinF;
     tangentX.y += dir.x * k * amp * cosF;
     tangentX.z -= Q * dir.x * dir.y * k * amp * sinF;
 
-    // 接線Z方向
+    // Tangent Z direction
     tangentZ.x -= Q * dir.x * dir.y * k * amp * sinF;
     tangentZ.y += dir.y * k * amp * cosF;
     tangentZ.z += 1.0f - Q * dir.y * dir.y * k * amp * sinF;
@@ -134,34 +135,27 @@ VSOutput VSMain(VSInput vin)
 {
     VSOutput vout;
 
-    float2 xz = vin.position.xz;
+    // World XZ including tile offset: keeps Gerstner waves phase-continuous with adjacent tiles
+    float2 xz = vin.position.xz + tileOffset;
     float3 disp = float3(0.0f, 0.0f, 0.0f);
     float3 tangentX = float3(1.0f, 0.0f, 0.0f);
     float3 tangentZ = float3(0.0f, 0.0f, 1.0f);
 
-    // 端までの距離を0〜1に正規化
-    float halfSize = FFT_TILE_SIZE * 0.5f;
-    float distToEdgeX = 1.0f - abs(vin.position.x) / halfSize;
-    float distToEdgeZ = 1.0f - abs(vin.position.z) / halfSize;
-    float distToEdge = min(distToEdgeX, distToEdgeZ);
-
-    // エッジ減衰係数：端で0、内部で1、トランジション幅は調整可
-    float heightFade = smoothstep(0.0f, 0.2f, distToEdge); // 0.05 = 5%のトランジション帯
-    float chopFade = smoothstep(0.0f, 0.4f, distToEdge);
-    // Gerstner変位に減衰を乗算
     GerstnerWave(xz, waveDir0, waveAmp0, waveLen0, waveSpd0, waveStp0, disp, tangentX, tangentZ);
     GerstnerWave(xz, waveDir1, waveAmp1, waveLen1, waveSpd1, waveStp1, disp, tangentX, tangentZ);
     GerstnerWave(xz, waveDir2, waveAmp2, waveLen2, waveSpd2, waveStp2, disp, tangentX, tangentZ);
     GerstnerWave(xz, waveDir3, waveAmp3, waveLen3, waveSpd3, waveStp3, disp, tangentX, tangentZ);
-    disp *= heightFade;
 
     float3 worldPos = vin.position + disp;
+    worldPos.xz += tileOffset;  // place the tile in world space
+
+    // FFT UV stays in [0,1] within the tile: the FFT texture tiles periodically in WRAP mode
     float2 fftUV = vin.position.xz / FFT_TILE_SIZE;
 
     float4 fftSample = g_heightMap.SampleLevel(g_sampler, fftUV, 0);
-    float fftHeight = fftSample.x * FFT_HEIGHT_SCALE * heightFade;
-    float fftDx = fftSample.z * FFT_CHOP_SCALE * chopFade; // より強い減衰を使用
-    float fftDz = g_dztMap.SampleLevel(g_sampler, fftUV, 0).x * FFT_CHOP_SCALE * chopFade;
+    float fftHeight = fftSample.x * FFT_HEIGHT_SCALE;
+    float fftDx = fftSample.z * FFT_CHOP_SCALE;
+    float fftDz = g_dztMap.SampleLevel(g_sampler, fftUV, 0).x * FFT_CHOP_SCALE;
 
     worldPos.y += fftHeight * -1.0f;
     worldPos.x += fftDx;
@@ -178,7 +172,7 @@ VSOutput VSMain(VSInput vin)
     return vout;
 
 }
-// --- 手続き的泡沫ノイズヘルパー ---
+// --- Procedural foam noise helpers ---
 float hash21(float2 p)
 {
     p = frac(p * float2(127.1, 311.7));
@@ -198,22 +192,22 @@ float valueNoise(float2 p)
     return lerp(lerp(a, b, u.x), lerp(c, d, u.x), u.y);
 }
 
-// 反射方向から空の色を再構成。動的空パレットと一致させる
+// Reconstruct sky color from reflection direction, matching the dynamic sky palette.
 float3 SampleSkyReflection(float3 reflDir)
 {
-    // 高度：0=地平線、1=天頂
+    // Elevation: 0=horizon, 1=zenith
     float h = saturate(reflDir.y);
 
-    // 太陽の高さから昼夜係数を計算
+    // Compute day/night factor from sun elevation
     float dayF  = saturate(sunDir.y * 4.0 + 0.4);
-    // 夕焼け係数：太陽が地平線近くにあるときにピーク
+    // Sunset factor: peaks when sun is near the horizon
     float sunsetF = saturate(1.0 - abs(sunDir.y) * 5.0);
     sunsetF = sunsetF * sunsetF;
 
-    // 夜と昼の天頂・地平線カラー
+    // Zenith and horizon colors for night and day
     float3 zenithDay  = float3(0.08, 0.25, 0.72);
-    float3 horizDay   = skyColor * 1.5;
-    // 夜空：ほぼ黒に近い暗いニュートラルグレー（青色バイアスを抑制）
+    float3 horizDay   = skyColor * 0.9;
+    // Night sky: near-black dark neutral gray (suppress blue bias)
     float3 zenithNight = float3(0.004, 0.005, 0.010);
     float3 horizNight  = float3(0.007, 0.008, 0.014);
 
@@ -221,46 +215,46 @@ float3 SampleSkyReflection(float3 reflDir)
     float3 horiz  = lerp(horizNight,  horizDay,   dayF);
     float3 sky    = lerp(horiz, zenith, h);
 
-    // 夕焼けオーバーレイ：地平線付近にオレンジゴールドを加算
-    float3 sunsetHorizon = float3(1.6, 0.72, 0.12); // HDR ゴールド
-    float3 sunsetZenith  = float3(0.10, 0.16, 0.48); // 青紫
+    // Sunset overlay: add orange-gold near the horizon
+    float3 sunsetHorizon = float3(1.6, 0.72, 0.12); // HDR gold
+    float3 sunsetZenith  = float3(0.10, 0.16, 0.48); // blue-purple
     float3 sunsetCol = lerp(sunsetZenith, sunsetHorizon, saturate(1.2 - h * 3.0));
     sky = lerp(sky, sunsetCol, sunsetF * saturate(1.2 - h * 2.0));
 
-    // 反射方向の太陽グロー
+    // Sun glow in reflection direction
     float sunDotR = max(0.0, dot(reflDir, sunDir));
     sky += sunColor * pow(sunDotR, 6.0) * 4.0;
 
-    // 地平線以下：深海色へフェード（夜は暗く）
+    // Below horizon: fade to deep ocean color (darker at night)
     float3 deepWater = float3(0.01, 0.02, 0.04) * (0.3 + dayF * 0.7);
     return lerp(deepWater, sky, smoothstep(-0.05, 0.1, reflDir.y));
 }
 
 float4 PSMain(VSOutput pin) : SV_TARGET
 {
-    // ピクセル単位でheightMapから法線を再計算（VSと同じスケールを使用）
+    // Recompute normals from heightMap per pixel (using the same scale as VS)
     const float texelSize = 1.0f / 256.0f;
     const float worldPerTexel = FFT_TILE_SIZE / 256.0f;
 
-    // 周辺高さをサンプリング
+    // Sample neighboring heights
     float hL = -g_heightMap.SampleLevel(g_sampler, pin.uv + float2(-texelSize, 0), 0).x * FFT_HEIGHT_SCALE;
     float hR = -g_heightMap.SampleLevel(g_sampler, pin.uv + float2(texelSize, 0), 0).x * FFT_HEIGHT_SCALE;
     float hD = -g_heightMap.SampleLevel(g_sampler, pin.uv + float2(0, -texelSize), 0).x * FFT_HEIGHT_SCALE;
     float hU = -g_heightMap.SampleLevel(g_sampler, pin.uv + float2(0, texelSize), 0).x * FFT_HEIGHT_SCALE;
 
-    // 周辺Dxをサンプリング
+    // Sample neighboring Dx
     float dxL = g_heightMap.SampleLevel(g_sampler, pin.uv + float2(-texelSize, 0), 0).z * FFT_CHOP_SCALE;
     float dxR = g_heightMap.SampleLevel(g_sampler, pin.uv + float2(texelSize, 0), 0).z * FFT_CHOP_SCALE;
     float dxD = g_heightMap.SampleLevel(g_sampler, pin.uv + float2(0, -texelSize), 0).z * FFT_CHOP_SCALE;
     float dxU = g_heightMap.SampleLevel(g_sampler, pin.uv + float2(0, texelSize), 0).z * FFT_CHOP_SCALE;
 
-// 周辺Dzをサンプリング
+    // Sample neighboring Dz
     float dzL = g_dztMap.SampleLevel(g_sampler, pin.uv + float2(-texelSize, 0), 0).x * FFT_CHOP_SCALE;
     float dzR = g_dztMap.SampleLevel(g_sampler, pin.uv + float2(texelSize, 0), 0).x * FFT_CHOP_SCALE;
     float dzD = g_dztMap.SampleLevel(g_sampler, pin.uv + float2(0, -texelSize), 0).x * FFT_CHOP_SCALE;
     float dzU = g_dztMap.SampleLevel(g_sampler, pin.uv + float2(0, texelSize), 0).x * FFT_CHOP_SCALE;
 
-// 偏微分
+    // Partial derivatives
     float dHdx = (hR - hL) / (2.0f * worldPerTexel);
     float dHdz = (hU - hD) / (2.0f * worldPerTexel);
     float dDxdx = (dxR - dxL) / (2.0f * worldPerTexel);
@@ -268,19 +262,19 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     float dDxdz = (dxU - dxD) / (2.0f * worldPerTexel);
     float dDzdx = (dzR - dzL) / (2.0f * worldPerTexel);
 
-// ヤコビアン法線：tangentX = (1+dDxdx, dHdx, dDzdx), tangentZ = (dDxdz, dHdz, 1+dDzdz)
+    // Jacobian normals: tangentX = (1+dDxdx, dHdx, dDzdx), tangentZ = (dDxdz, dHdz, 1+dDzdz)
     float3 tangentX = float3(1.0f + dDxdx, dHdx, dDzdx);
     float3 tangentZ = float3(dDxdz, dHdz, 1.0f + dDzdz);
     float3 N = normalize(cross(tangentZ, tangentX));
 
-    // 波紋による法線の乱れ
+    // Normal perturbation by ripples
     for (uint i = 0; i < rippleCount; ++i)
     {
         float2 toPixel = pin.posW.xz - ripples[i].position;
         float dist = length(toPixel);
         float r = ripples[i].radius;
 
-    // 波紋リング付近のみ乱れを適用
+        // Apply perturbation only near the ripple ring
         float ringWidth = 1.5f;
         float inRing = saturate(1.0f - abs(dist - r) / ringWidth);
 
@@ -295,43 +289,90 @@ float4 PSMain(VSOutput pin) : SV_TARGET
             N = normalize(N);
         }
     }
-    // 視線・光源方向
+    // View and light directions
     float3 V = normalize(cameraPos - pin.posW);
+    // Double-sided normal: when viewed from underwater, N and V point in opposite directions; flip to unify.
+    if (dot(N, V) < 0.0f) N = -N;
     float3 L = sunDir;
     float3 H = normalize(V + L);
 
-    // 水体固有色：深海はほぼ黒に近い暗色。
-    // 可視光の「青」はFresnelによる空の映り込みで生まれるため、
-    // 水体自体に鮮やかな青を持たせない。
+    // Intrinsic water body color: deep ocean is near-black.
+    // The visible "blue" of water arises from Fresnel sky reflection, so
+    // the water body itself should not carry a vivid blue.
     float3 deepColor    = float3(0.004, 0.014, 0.030);
     float3 shallowColor = float3(0.007, 0.022, 0.048);
-    // 高さによる補間は極めて控えめに（縞模様防止）
+    // Height-based interpolation is very subtle (to prevent banding)
     float heightFactor = saturate(pin.posW.y * 0.08f + 0.5f);
     float3 waterColor = lerp(deepColor, shallowColor, heightFactor);
 
-    // Diffuse：夜間はニュートラルな暗色（sunColorの青色バイアスを除去）
+    // Diffuse: neutral dark at night (removes blue bias from sunColor)
     float NdotL = saturate(dot(N, L));
-    float nightT = saturate(1.0 - sunIntensity * 3.0);   // 0=昼, 1=深夜
-    float3 nightAmbient = float3(0.022, 0.024, 0.028);   // ほぼ黒、ごく僅かに青みがかる
+    float nightT = saturate(1.0 - sunIntensity * 3.0);   // 0=day, 1=deep night
+    float3 nightAmbient = float3(0.022, 0.024, 0.028);   // near-black with very slight blue tint
     float3 ambLight = lerp(sunColor, nightAmbient, nightT);
     float3 diffuse = waterColor * (NdotL * 0.5f * sunIntensity + 0.5f);
     diffuse *= ambLight;
 
-    // スペキュラー：タイトな鏡面ハイライト + 広散乱ローブの2層構造
+    // Specular: two-layer structure — tight specular highlight + broad scatter lobe
     float NdotH = saturate(dot(N, H));
     float specTight = pow(NdotH, 128.0f) * 14.0f;
-    // 夜間（月光）は広散乱ローブを無効：月色{0.6,0.7,1.0}が緑かぶりを起こすため
+    // Disable the broad scatter lobe at night (moonlight): moon color {0.6,0.7,1.0} causes green cast
     float daySpec   = saturate((sunIntensity - 0.35) * 10.0);
     float specBroad = pow(NdotH,  18.0f) *  0.6f * daySpec;
     float3 specularColor = sunColor * (specTight + specBroad) * sunIntensity;
 
     // Fresnel
     float F0 = 0.02f;
-    float NdotV = saturate(dot(N, V));
-    float fresnel = F0 + (1.0f - F0) * pow(1.0f - NdotV, 5.0f);
+    float NdotV = saturate(dot(N, V));  // always positive after flip
+
+    // ====== Underwater camera: Snell's window + total internal reflection ======
+    if (cameraPos.y < -0.3f)
+    {
+        // Critical angle arcsin(1/1.333) ≈ 48.6° → cos ≈ 0.664
+        // NdotV > critCos → Snell's window (sky visible); below → total internal reflection
+        float critCos    = 0.664f;
+        float snellT     = smoothstep(critCos - 0.12f, critCos + 0.08f, NdotV);
+
+        // Inside window: sample skySnapshot in refraction direction
+        float3 refractDir = refract(-V, N, 1.0f / 1.333f);
+        float4x4 vp_uw    = mul(view, proj);
+        float4 rc         = mul(float4(pin.posW + refractDir * 200.0f, 1.0f), vp_uw);
+        float2 snellUV    = saturate(rc.xy / rc.w * float2(0.5f, -0.5f) + 0.5f);
+        snellUV          += N.xz * 0.025f;  // wave surface distortion
+        float3 snellSky   = g_skySnapshot.SampleLevel(g_sampler, snellUV, 0).rgb;
+        // Slightly brighter at the window edge (caustic effect)
+        float rimBright   = 1.0f + smoothstep(critCos - 0.15f, critCos, NdotV) * 0.4f;
+        snellSky         *= rimBright;
+
+        // Total internal reflection side: dark underwater scatter color
+        float3 tirColor   = float3(0.003f, 0.018f, 0.055f);
+
+        float3 surfaceColor = lerp(tirColor, snellSky, snellT);
+
+        // Light absorption by camera depth
+        float camDepth    = max(0.1f, -cameraPos.y);
+        float3 absorbUW   = float3(0.45f, 0.06f, 0.025f);
+        float3 absorption = exp(-absorbUW * camDepth * 0.4f);
+        surfaceColor     *= absorption;
+
+        // Underwater specular (shallow areas only)
+        float specUW = pow(saturate(dot(N, H)), 64.0f) * 0.2f * sunIntensity;
+        surfaceColor += sunColor * specUW * saturate(1.0f - camDepth * 0.1f);
+
+        // Distance fog (underwater visibility)
+        float dist_uw = length(cameraPos - pin.posW);
+        float uwFog   = saturate((dist_uw - 15.0f) / 60.0f);
+        float3 deepFog = float3(0.004f, 0.018f, 0.05f) * absorption;
+        surfaceColor   = lerp(surfaceColor, deepFog, uwFog);
+
+        return float4(surfaceColor, 1.0f);
+    }
+    // ====== Below: normal (above-water) rendering ======
+
+    float fresnel = min(F0 + (1.0f - F0) * pow(1.0f - NdotV, 5.0f), 0.65f);
     float3 reflectDir = reflect(-V, N);
 
-    // ---- 反射サンプル（フレネル未適用、後で合成）----
+    // ---- Reflection sample (Fresnel not yet applied; composited later) ----
     float3 reflectSample;
     {
         float4x4 vp = mul(view, proj);
@@ -347,73 +388,72 @@ float4 PSMain(VSOutput pin) : SV_TARGET
 
         float3 ssrSample  = g_skySnapshot.SampleLevel(g_sampler, reflUV, 0).rgb;
         float3 procSample = SampleSkyReflection(reflectDir);
-        float  reflBright = lerp(0.10, 2.0, saturate(sunIntensity * 1.8));
+        float  reflBright = lerp(0.08, 1.0, saturate(sunIntensity * 1.8));
         reflectSample = lerp(procSample, ssrSample, fade) * reflBright;
     }
 
-    // ---- 透過色（Beer-Lambert 水体吸収 + 屈折ゆらぎ）----
+    // ---- Transmitted color (Beer-Lambert water absorption + refraction shimmer) ----
     float3 transmitted;
     {
-        float  waterDepth  = max(0.0, 2.8 - pin.posW.y);
-        float3 absorbCoeff = float3(0.60, 0.14, 0.03);
-        float3 deepOcean   = float3(0.018, 0.22, 0.52) * waterBodyStr;
+        // Open ocean: optical path length based on NdotV (longer at grazing angles), clamped to 12m
+        float  waterDepth  = clamp(4.0 / max(NdotV, 0.15), 4.0, 12.0);
+        // Open ocean blue-green: G/B ratio ≈ 0.47 (measured open-ocean value); lower G absorption to retain green tint
+        float3 absorbCoeff = float3(0.45, 0.06, 0.025);
+        float3 deepOcean   = float3(0.010, 0.15, 0.32) * waterBodyStr;
         float  sunLit      = sunIntensity * 0.55 + 0.12;
         float3 transBody   = deepOcean * exp(-absorbCoeff * waterDepth) * sunLit;
 
-        // 屈折ゆらぎ：法線でスクリーンUVを微小変位
-        // 屈折UV：refractionRT（空＋水下物体）を法線で揺らしてサンプリング
-        float2 screenUV    = pin.posH.xy * float2(1.0 / screenW, 1.0 / screenH);
-        float2 refractUV   = saturate(screenUV + N.xz * waterRefract * (1.0 - NdotV));
-        float3 refractSamp = g_refraction.SampleLevel(g_sampler, refractUV, 0).rgb;
-        // 水体吸収色と折射サンプルを混合（水深が浅いほど水下物体が透けて見える）
-        float  depthBlend  = saturate(1.0 - waterDepth * 0.18);
-        transmitted = lerp(transBody, refractSamp * exp(-absorbCoeff * waterDepth), depthBlend)
-                    + transBody * (1.0 - depthBlend);
+        // Refraction shimmer: slightly displace screen UV by the normal
+        // Refraction UV: sample refractionRT (sky + underwater objects) disturbed by normal
+        // Phase1: refractionRT contains only sky color, so not used here
+        // Phase2 (underwater camera): will reuse as ScreenUV + normal displacement for Snell's window
+        transmitted = transBody;
     }
 
-    // ---- フレネル合成：反射 + 透過 ----
+    // ---- Fresnel composite: reflection + transmission ----
     float transWeight = waterMinTrans + (1.0 - waterMinTrans) * (1.0 - fresnel);
     float3 color = fresnel * reflectSample
                  + transWeight * transmitted
                  + specularColor
                  + diffuse * 0.30;
 
-    // --- 次表面散乱（SSS）：波頂部の透過光（逆光時に青緑に輝く） ---
+    // --- Sub-surface scattering (SSS): transmitted light at wave crests (glows blue-green against backlight) ---
     {
         float3 sssDir      = normalize(-sunDir + N * 0.5);
         float  sssView     = pow(saturate(dot(V, sssDir)), 4.0);
         float  sssCrest    = saturate(pin.posW.y * 0.18 + 0.2);
         float  sssDaylight = saturate((sunIntensity - 0.35) * 10.0);
-        float3 sssColor    = float3(0.0, 0.55, 0.40) * sssView * sssCrest
+        // Wave crest transmitted light: real waves are blue-green (keep green subtle)
+        float3 sssColor    = float3(0.0, 0.38, 0.42) * sssView * sssCrest
                              * min(sunIntensity, 1.5) * 1.4 * sssDaylight;
         color += sssColor;
     }
 
-    // 霧
+    // Fog
     float dist = length(cameraPos - pin.posW);
     float fogFactor = saturate((dist - fogStart) / (fogEnd - fogStart));
     color = lerp(color, skyColor, fogFactor);
 
 
-    // --- 波頂部泡沫 ---
+    // --- Wave crest foam ---
     float J = (1.0f + dDxdx) * (1.0f + dDzdz) - dDxdz * dDzdx;
 
-    // ヤコビアンが1を下回るほど（波が折り畳まれるほど）泡沫が強くなる
+    // The more the Jacobian falls below 1 (more wave folding), the stronger the foam
     float sharpness = lerp(5.0, 2.5, foamIntensity);
     float rawFoam   = pow(saturate(1.0 - J), sharpness);
     rawFoam *= lerp(0.15, 1.0, foamIntensity);
 
-    // 上向き面のみに泡沫を制限（波の側面に貼り付かないよう）
+    // Restrict foam to upward-facing surfaces (prevents sticking to wave sides)
     float topFace = saturate((N.y - 0.45) / 0.55);
 
-    // 風向に沿った泡沫ストリーク UV
-    // 波方向に引き伸ばし（4:1比率）、直交方向に縞模様を生成
+    // Foam streak UV along wind direction:
+    // Stretch along wave direction (4:1 ratio), generate streaks perpendicular to it
     float2 waveDir2D = normalize(waveDir0);
     float2 perpDir2D = float2(-waveDir2D.y, waveDir2D.x);
     float2 worldXZ   = pin.uv * FFT_TILE_SIZE;
     float  alongAxis = dot(worldXZ, waveDir2D);
     float  perpAxis  = dot(worldXZ, perpDir2D);
-    // 波方向に伸びたストリーク座標系（沿方向: 1/4スケール → 長いスジ）
+    // Streak coordinate system stretched along wave direction (along-axis: 1/4 scale → long streaks)
     float2 foamUVBase = float2(perpAxis * 0.25f, alongAxis * 0.065f);
     float2 fuv  = foamUVBase + float2(time * 0.10f, time * 0.06f);
     float  fn1  = valueNoise(fuv);
@@ -424,7 +464,7 @@ float4 PSMain(VSOutput pin) : SV_TARGET
 
     float foamMask = saturate(rawFoam * topFace * (0.15 + foamNoise * 1.6));
 
-    // 嵐時の微細飛沫レイヤー
+    // Fine spray layer during storms
     float spray = 0.0;
     [branch]
     if (foamIntensity > 0.35)
@@ -435,15 +475,15 @@ float4 PSMain(VSOutput pin) : SV_TARGET
         spray *= saturate(rawFoam * topFace * 5.0);
     }
 
-    // HDR泡沫色（ブルームを誘発）
-    // 実際の海洋泡沫は白色：青緑のバイアスを除去
+    // HDR foam color (triggers bloom)
+    // Real ocean foam is white: remove blue-green bias
     float3 foamWhite = float3(2.2, 2.2, 2.2);
     float3 foamEdge  = float3(1.9, 1.9, 1.95);
     float3 foamColor = lerp(foamEdge, foamWhite, foamNoise);
     color = lerp(color, foamColor, foamMask * 0.90);
     color = lerp(color, foamWhite * 0.75, spray * 0.45);
 
-    // --- 影（浮遊物体から海面へのシャドウ） ---
+    // --- Shadow (from floating objects onto the ocean surface) ---
     [branch]
     if (shadowEnabled > 0.5 && shadowStrength > 0.0)
     {
@@ -457,7 +497,7 @@ float4 PSMain(VSOutput pin) : SV_TARGET
             float  shadow = 0.0;
             float  dx     = 1.0 / 2048.0;
             int2   tc     = (int2)(suv * 2048.0);
-            // 3×3 PCF（整数座標Loadで正確な深度比較）
+            // 3×3 PCF (accurate depth comparison using integer-coordinate Load)
             [unroll] for (int sy = -1; sy <= 1; sy++)
             [unroll] for (int sx = -1; sx <= 1; sx++)
             {
@@ -469,5 +509,32 @@ float4 PSMain(VSOutput pin) : SV_TARGET
         }
     }
 
-    return float4(color, 1.0f);
+    // ============================================================
+    // Debug output: identify the cause of white-out
+    // Change DEBUG_MODE and rebuild; if the white area turns red, that source is the cause.
+    //   0 = normal rendering
+    //   1 = Fresnel value (bright = high Fresnel = grazing angle)
+    //   2 = reflection sample reflectSample
+    //   3 = specular color specularColor
+    //   4 = transmitted color
+    //   5 = normal N (red=X, green=Y, blue=Z)
+    //   6 = diffuse only
+    #define DEBUG_MODE 0
+
+    #if DEBUG_MODE == 1
+        return float4(fresnel, fresnel, fresnel, 1.0f);
+    #elif DEBUG_MODE == 2
+        return float4(saturate(reflectSample), 1.0f);
+    #elif DEBUG_MODE == 3
+        return float4(saturate(specularColor), 1.0f);
+    #elif DEBUG_MODE == 4
+        return float4(saturate(transmitted), 1.0f);
+    #elif DEBUG_MODE == 5
+        return float4(N * 0.5f + 0.5f, 1.0f);
+    #elif DEBUG_MODE == 6
+        return float4(saturate(diffuse), 1.0f);
+    #else
+        return float4(color, 1.0f);
+    #endif
+    // ============================================================
 }

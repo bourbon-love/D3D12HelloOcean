@@ -1,7 +1,7 @@
 // ============================================================
 // spray.hlsl
-// 飛沫パーティクルのビルボードシェーダー。
-// ノイズで縁を崩した不規則な白色破片として描画する。
+// Spray particle billboard shader.
+// Renders as irregular white fragments with noise-broken edges.
 // ============================================================
 cbuffer SprayCB : register(b0)
 {
@@ -30,7 +30,7 @@ struct VSOutput
 
 VSOutput SprayVS(VSInput vin)
 {
-    // 縦長の楕円ビルボード（水しぶきの縦方向の伸びを表現）
+    // Vertically elongated elliptical billboard (represents the vertical stretch of water spray)
     float3 wp = vin.center
               + cameraRight * vin.cornerU * vin.size * 0.55
               + cameraUp    * vin.cornerV * vin.size;
@@ -51,17 +51,17 @@ float4 SprayPS(VSOutput pin) : SV_TARGET
 {
     float2 c = pin.uv * 2.0 - 1.0;
 
-    // 縁をノイズで崩して不規則な飛沫の形に
+    // Break the edges with noise for an irregular spray shape
     float2 noiseUV = floor(pin.uv * 7.0);
     float  edge    = 0.72 + hash21(noiseUV) * 0.22;
     float  d       = dot(c, c);
     if (d > edge * edge) discard;
 
-    // 中心ほど不透明、縁ほど透明
+    // Opaque at center, transparent at edges
     float soft = saturate(1.0 - sqrt(d) / edge);
-    soft = soft * soft;   // 2乗で縁をシャープに
+    soft = soft * soft;   // square to sharpen the edges
 
-    // 白色（HDR乗算なし）、わずかに青みがかった水しぶき色
+    // White (no HDR multiplication), slightly blue-tinted spray color
     float3 color = lerp(float3(0.82, 0.92, 1.0), float3(1.0, 1.0, 1.0), soft);
     return float4(color, pin.alpha * soft);
 }

@@ -1,7 +1,7 @@
 ﻿// ============================================================
 // RainSystem.h
-// 雨粒子システムクラス。最大2000粒子の生成・移動と
-// 最大200個の波紋を管理する。
+// Rain particle system class. Manages up to 2000 particles and
+// up to 200 ripples.
 // ============================================================
 #pragma once
 #include <d3d12.h>
@@ -18,24 +18,24 @@ using Microsoft::WRL::ComPtr;
 struct RainDrop
 {
     XMFLOAT3 position;
-    float    speed;      // 下落速度
-    float    length;     // 雨线长度
+    float    speed;      // fall speed
+    float    length;     // raindrop line length
     
 };
 
 struct RainVertex
 {
     XMFLOAT3 position;
-    float    alpha;     // 透明度
+    float    alpha;     // opacity
 };
 
 struct Ripple
 {
-    XMFLOAT2 position; // 水面XZ坐标
-    float    radius;   // 当前半径
-    float    maxRadius; // 最大半径
-    float    age;      // 当前存活时间
-    float    lifetime; // 总存活时间
+    XMFLOAT2 position; // water surface XZ coordinates
+    float    radius;   // current radius
+    float    maxRadius; // maximum radius
+    float    age;      // current age
+    float    lifetime; // total lifetime
 };
 
 class RainSystem
@@ -46,7 +46,7 @@ public:
         const UINT8* vsData, UINT vsSize,
         const UINT8* psData, UINT psSize);
     void InitResources(ComPtr<ID3D12GraphicsCommandList> cmdList);
-    void Update(float deltaTime, float intensity, float windDirX, float windDirY); // intensity: 0=无雨, 1=暴风雨
+    void Update(float deltaTime, float intensity, float windDirX, float windDirY); // intensity: 0=no rain, 1=heavy storm
     void Render(RenderContext& ctx,
         const XMMATRIX& view, const XMMATRIX& proj,
         const XMFLOAT3& cameraPos);
@@ -61,11 +61,11 @@ private:
     void SpawnRainDrop(const XMFLOAT3& cameraPos);
 
     static const UINT MAX_RAINDROPS = 2000;
-    static const UINT VERTS_PER_DROP = 2; // 每个雨滴两个顶点（线段）
+    static const UINT VERTS_PER_DROP = 2; // two vertices per raindrop (line segment)
 	static const UINT MAX_RIPPLES = 200;
 	std::vector<Ripple> m_ripples;
 
-    // 供 shader 采样的涟漪数据 CB
+    // Ripple data CB sampled by the shader
     struct RippleData
     {
 		XMFLOAT2 positions;
@@ -75,7 +75,7 @@ private:
     ComPtr<ID3D12Device>            m_device;
     ComPtr<ID3D12PipelineState>     m_rainPSO;
     ComPtr<ID3D12RootSignature>     m_rainRootSig;
-    // 动态 VB，每帧更新
+    // Dynamic VB, updated every frame
     ComPtr<ID3D12Resource>          m_rainVB;
     D3D12_VERTEX_BUFFER_VIEW        m_rainVBView = {};
     RainVertex* m_rainVBMapped = nullptr;
@@ -84,7 +84,7 @@ private:
     struct __declspec(align(256)) RainCB
     {
         XMMATRIX viewProj;
-        float    alpha;    // 整体透明度，随天气强度变化
+        float    alpha;    // overall opacity, varies with weather intensity
         float    pad[3];
     };
     ComPtr<ID3D12Resource>  m_rainCB;
@@ -105,7 +105,7 @@ private:
     float                   m_intensity = 0.0f;
     UINT                    m_activeDrops = 0;
 
-	// 风向，单位向量，暴风雨时雨线倾斜
+	// Wind direction, unit vector; rain lines tilt during storms
     float m_windDirX = 1.0f;
     float m_windDirY = 0.0f;
 };

@@ -1446,7 +1446,7 @@ void PostProcessPipeline::RenderTAA(ID3D12GraphicsCommandList* cmd)
 // ============================================================
 void PostProcessPipeline::RenderToneMap(
     ID3D12GraphicsCommandList* cmd,
-    UINT                        frameIndex,
+    UINT                        /*frameIndex*/,
     D3D12_CPU_DESCRIPTOR_HANDLE swapRTV,
     Renderer*                   renderer)
 {
@@ -1471,11 +1471,15 @@ void PostProcessPipeline::RenderToneMap(
     cmd->RSSetViewports(1, &m_viewport);
     cmd->RSSetScissorRects(1, &m_scissor);
 
+    float camY = renderer->GetCameraPos().y;
+    float aboveWater  = saturate( camY / 0.5f);
+    float underWater  = saturate(-camY / 0.5f) * 0.5f;
+    float godRayFactor = max(aboveWater, underWater);
     float params[12] = {
-        bloomStrength, exposure, godRayStrength,
+        bloomStrength, exposure, godRayStrength * godRayFactor,
         vignetteStrength, grainStrength, renderer->GetTime(),
         ssaoEnabled ? ssaoStrength : 0.0f, 0.0f,
-        renderer->GetCameraPos().y, 0.0f, 0.0f, 0.0f
+        camY, 0.0f, 0.0f, 0.0f
     };
     cmd->SetPipelineState(m_toneMappingPSO.Get());
     cmd->SetGraphicsRoot32BitConstants(2, 12, params, 0);
@@ -1560,6 +1564,7 @@ void PostProcessPipeline::RenderLensFlare(
     SkyDome*   skyDome)
 {
     if (!lensFlareEnabled) return;
+    if (renderer->GetCameraPos().y < -0.3f) return;  // hidden underwater
 
     XMFLOAT3 sd3 = skyDome->GetSunDirection();
     if (sd3.y < -0.04f) return;

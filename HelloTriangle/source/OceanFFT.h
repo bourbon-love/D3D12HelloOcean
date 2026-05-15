@@ -1,8 +1,8 @@
 ﻿// ============================================================
 // OceanFFT.h
-// GPU FFT海洋シミュレーションクラス。
-// Phillipsスペクトル→時間発展→IFFTのコンピュートパイプラインで
-// 高さ・変位マップを毎フレーム生成する。
+// GPU FFT ocean simulation class.
+// Generates height/displacement maps every frame via a compute pipeline:
+// Phillips spectrum -> time evolution -> IFFT.
 // ============================================================
 #pragma once
 #include <d3d12.h>
@@ -24,7 +24,7 @@ public:
     void Dispatch(ComPtr<ID3D12GraphicsCommandList> cmdList, float time);
 
     ID3D12Resource* GetHeightMap() const { return m_heightMap.Get(); }
-    ID3D12Resource* GetDztMap()    const { return m_dztMap.Get(); }   // 新增：Dz结果
+    ID3D12Resource* GetDztMap()    const { return m_dztMap.Get(); }   // Added: Dz result
     ID3D12DescriptorHeap* GetSRVHeap()   const { return m_srvHeap.Get(); }
 
     float windSpeed = 20.0f;
@@ -47,45 +47,45 @@ private:
     UINT                 m_textureSize = 256;
 
     // Textures
-    ComPtr<ID3D12Resource> m_h0Map;       // Phillips初始化结果，只写一次
-    ComPtr<ID3D12Resource> m_hktMap;      // h(k,t) + Dx(k,t) 频域，每帧更新；IFFT后存 h+Dx 结果
-    ComPtr<ID3D12Resource> m_tempMap;     // h+Dx IFFT 的 pingpong 缓冲
-    ComPtr<ID3D12Resource> m_heightMap;   // 最终 h+Dx 场，Wave Shader 采样 (.x=h, .z=Dx)
-    ComPtr<ID3D12Resource> m_dztMap;      // Dz(k,t) 频域；IFFT后存 Dz 结果
-    ComPtr<ID3D12Resource> m_dztTempMap;  // Dz IFFT 的 pingpong 缓冲
+    ComPtr<ID3D12Resource> m_h0Map;       // Phillips initialization result, written once
+    ComPtr<ID3D12Resource> m_hktMap;      // h(k,t) + Dx(k,t) frequency domain, updated each frame; stores h+Dx result after IFFT
+    ComPtr<ID3D12Resource> m_tempMap;     // Ping-pong buffer for h+Dx IFFT
+    ComPtr<ID3D12Resource> m_heightMap;   // Final h+Dx field, sampled by Wave Shader (.x=h, .z=Dx)
+    ComPtr<ID3D12Resource> m_dztMap;      // Dz(k,t) frequency domain; stores Dz result after IFFT
+    ComPtr<ID3D12Resource> m_dztTempMap;  // Ping-pong buffer for Dz IFFT
 
     
-    // 供时域演化计算使用，slot0=cbv(timeCB), slot1=h0SRV, slot2=hktUAV, slot3=dztUAV
+    // Used for time evolution compute; slot0=cbv(timeCB), slot1=h0SRV, slot2=hktUAV, slot3=dztUAV
 	ComPtr<ID3D12DescriptorHeap> m_timeEvoHeap;
-    // 供 IFFT 计算使用，slot0=hktUAV/tempMapUAV 交替使用，slot1=dztUAV/dztTempUAV 交替使用
-	ComPtr<ID3D12DescriptorHeap> m_ifftHeap;  
-    // 专门给 Dz IFFT 用的描述符堆，slot0=dztUAV/tempMapUAV 交替使用
-	ComPtr<ID3D12DescriptorHeap> m_ifftDzHeap; 
-    // srvHeap 供 Wave Shader 采样
+    // Used for IFFT compute; slot0=hktUAV/tempMapUAV alternating, slot1=dztUAV/dztTempUAV alternating
+	ComPtr<ID3D12DescriptorHeap> m_ifftHeap;
+    // Dedicated descriptor heap for Dz IFFT; slot0=dztUAV/tempMapUAV alternating
+	ComPtr<ID3D12DescriptorHeap> m_ifftDzHeap;
+    // srvHeap sampled by Wave Shader
     // slot0 = heightMap SRV (.x=h, .z=Dx)
     // slot1 = dztMap    SRV (.x=Dz)
     ComPtr<ID3D12DescriptorHeap> m_srvHeap;
-    // Phillips heap（持久化）
+    // Phillips heap (persistent)
     ComPtr<ID3D12DescriptorHeap> m_phillipsHeap;
-    // Phillips管线（初始化时跑一次）
+    // Phillips pipeline (run once at initialization)
     ComPtr<ID3D12RootSignature>  m_phillipsRootSig;
     ComPtr<ID3D12PipelineState>  m_phillipsPSO;
     ComPtr<ID3D12Resource>       m_phillipsCB;
     UINT8* m_phillipsCBMapped = nullptr;
 
-    // 时域演化管线（每帧）
+    // Time evolution pipeline (every frame)
     ComPtr<ID3D12RootSignature>  m_timeEvoRootSig;
     ComPtr<ID3D12PipelineState>  m_timeEvoPSO;
     ComPtr<ID3D12Resource>       m_timeCB;
     UINT8* m_timeCBMapped = nullptr;
 
-    // IFFT管线（每帧，h+Dx 和 Dz 复用同一个 PSO）
+    // IFFT pipeline (every frame, h+Dx and Dz share the same PSO)
     ComPtr<ID3D12RootSignature>  m_ifftRootSig;
     ComPtr<ID3D12PipelineState>  m_ifftPSO;
     ComPtr<ID3D12Resource>       m_ifftCB;
     UINT8* m_ifftCBMapped = nullptr;
 
-    // 初始化用临时对象
+    // Temporary objects used during initialization
     ComPtr<ID3D12CommandAllocator>    m_initAllocator;
     ComPtr<ID3D12GraphicsCommandList> m_initCmdList;
 };

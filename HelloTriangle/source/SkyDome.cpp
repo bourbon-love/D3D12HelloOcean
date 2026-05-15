@@ -3,40 +3,44 @@
 #include <cmath>
 #include <algorithm>
 
-// 球体頂点。Positionのみ。元のSKY_VERTEXと同じ
+// Sphere vertex. Position only. Same as the original SKY_VERTEX.
 struct SkyVertex { XMFLOAT3 position; };
 
-// 元のCreateSphereVerticesのロジックをそのまま再利用する
+// Reuse the same logic as the original CreateSphereVertices.
 static void BuildSphereMesh(
     float radius, int slices, int stacks,
     std::vector<SkyVertex>& outVerts,
     std::vector<uint32_t>& outIdx)
 {
-    // 頂点生成：元と全く同じ公式
+    // Vertex generation: exactly slices vertices per ring — no duplicate seam vertex.
+    // The old (slices+1) layout had slice=0 and slice=slices as separate vertex objects at
+    // nearly the same position (sinf(2π) ≈ -8.7e-8, not exactly 0), so the rasterizer
+    // treated the shared seam edge as two distinct edges and drew a 1-pixel visible line.
     for (int stack = 0; stack <= stacks; ++stack)
     {
         float phi = XM_PI * stack / stacks;
         float y = radius * cosf(phi);
         float r = radius * sinf(phi);
 
-        for (int slice = 0; slice <= slices; ++slice)
+        for (int slice = 0; slice < slices; ++slice)   // < slices, no duplicate
         {
             float theta = 2.0f * XM_PI * slice / slices;
             outVerts.push_back({ XMFLOAT3(r * sinf(theta), y, r * cosf(theta)) });
         }
     }
 
-    // インデックス生成：元と全く同じ巻き順
+    // Index generation: wrap the last slice back to slice=0 so the seam triangles
+    // share the exact same vertex objects — zero gap, zero overlap.
     for (int stack = 0; stack < stacks; ++stack)
     {
         for (int slice = 0; slice < slices; ++slice)
         {
-            uint32_t v1 = stack * (slices + 1) + slice;
-            uint32_t v2 = stack * (slices + 1) + slice + 1;
-            uint32_t v3 = (stack + 1) * (slices + 1) + slice;
-            uint32_t v4 = (stack + 1) * (slices + 1) + slice + 1;
+            int nextSlice = (slice + 1) % slices;           // wraps 49→0 at the seam
+            uint32_t v1 = stack       * slices + slice;
+            uint32_t v2 = stack       * slices + nextSlice;
+            uint32_t v3 = (stack + 1) * slices + slice;
+            uint32_t v4 = (stack + 1) * slices + nextSlice;
 
-            // 元の巻き順
             outIdx.push_back(v1); outIdx.push_back(v3); outIdx.push_back(v2);
             outIdx.push_back(v2); outIdx.push_back(v3); outIdx.push_back(v4);
         }
@@ -55,7 +59,7 @@ void SkyDome::InitPSO(
     m_width = width;
     m_height = height;
 
-    // CBV — アップロードヒープ。毎フレーム更新する
+    // CBV — upload heap, updated every frame
     {
         auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
         auto bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(sizeof(SkyCB));
@@ -75,22 +79,22 @@ void SkyDome::CreateSkyPSO(
     const UINT8* vsData, UINT vsSize,
     const UINT8* psData, UINT psSize)
 {
-    // 天空DomeはPositionのみ。SkyVertexと完全に対応している
+    // Sky dome uses Position only. Exactly matches SkyVertex.
     D3D12_INPUT_ELEMENT_DESC layout[] =
     {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
-    // RasterizerState：前面をカリングする（カメラが球の内部にいるため、内面を見ている）
+    // RasterizerState: cull front faces (camera is inside the sphere, looking at inner faces)
     CD3DX12_RASTERIZER_DESC rasterDesc(D3D12_DEFAULT);
     rasterDesc.CullMode = D3D12_CULL_MODE_FRONT;
 
-    // DepthStencilState：深度テストを有効にするが深度を書き込まない
-    // 空は最も遠い位置にあり、海洋を覆ってはいけない
+    // DepthStencilState: enable depth test but disable depth writes.
+    // The sky is at the farthest position and must not occlude the ocean.
     CD3DX12_DEPTH_STENCIL_DESC depthDesc(D3D12_DEFAULT);
-    depthDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO; // 深度書き込みなし
-    depthDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL; // LESS_EQUALを使用
+    depthDesc.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO; // no depth write
+    depthDesc.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL; // use LESS_EQUAL
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
     psoDesc.InputLayout = { layout, _countof(layout) };
@@ -121,7 +125,7 @@ void SkyDome::CreateSphereMesh(ComPtr<ID3D12GraphicsCommandList> cmdList)
     std::vector<SkyVertex> verts;
     std::vector<uint32_t>  indices;
 
-    // 50x50。元のサイズと同じ
+    // 50x50, same size as the original
     BuildSphereMesh(1.0f, 50, 50, verts, indices);
     m_indexCount = static_cast<UINT>(indices.size());
 
@@ -132,7 +136,7 @@ void SkyDome::CreateSphereMesh(ComPtr<ID3D12GraphicsCommandList> cmdList)
     void* pData = nullptr;
     CD3DX12_RANGE readRange(0, 0);
 
-    // VB — アップロードヒープ（球体は静的だが、データ量が小さいのでアップロードヒープでも問題ない）
+    // VB — upload heap (sphere is static but data is small, so upload heap is fine)
     auto vbDesc = CD3DX12_RESOURCE_DESC::Buffer(vbSize);
     ThrowIfFailed(m_device->CreateCommittedResource(
         &uploadHeap, D3D12_HEAP_FLAG_NONE, &vbDesc,
@@ -146,7 +150,7 @@ void SkyDome::CreateSphereMesh(ComPtr<ID3D12GraphicsCommandList> cmdList)
     m_vbView.StrideInBytes = sizeof(SkyVertex);
     m_vbView.SizeInBytes = vbSize;
 
-    // インデックスバッファ
+    // Index buffer
     auto ibDesc = CD3DX12_RESOURCE_DESC::Buffer(ibSize);
     ThrowIfFailed(m_device->CreateCommittedResource(
         &uploadHeap, D3D12_HEAP_FLAG_NONE, &ibDesc,
@@ -160,7 +164,7 @@ void SkyDome::CreateSphereMesh(ComPtr<ID3D12GraphicsCommandList> cmdList)
     m_ibView.Format = DXGI_FORMAT_R32_UINT;
     m_ibView.SizeInBytes = ibSize;
 
-    // アップロードヒープではCopyBufferRegionが不要。cmdListパラメータは未使用
+    // Upload heap does not require CopyBufferRegion. cmdList parameter is unused.
     (void)cmdList;
 }
 
@@ -170,7 +174,7 @@ void SkyDome::Update(float deltaTime)
 
     float tilt = 0.5f;
 
-    // 太陽の軌道
+    // Sun orbit
     float sunAngle = m_time * 0.3f;
     m_sunDir.x = cosf(sunAngle);
     m_sunDir.y = sinf(sunAngle) * tilt;
@@ -183,16 +187,12 @@ void SkyDome::Update(float deltaTime)
     m_sunDir.y /= sunLen;
     m_sunDir.z /= sunLen;
 
-    // 月の独立軌道。速度がやや遅く、軌道面も若干傾いている
-    float moonAngle = m_time * 0.23f; // 太陽より遅く。月相周期を生成する
-    float moonTilt = 0.4f;           // 軌道傾角が若干異なる
-
-    // 月は太陽と反対側。日の出・日の入り時に地平線を滑らかに越える（硬い跳びを避ける）
+    // Moon is on the opposite side from the sun. Smoothly crosses the horizon at sunrise/sunset (avoids hard jumps).
     {
-        // sunBlend: 太陽が完全に地平線下で=0、完全に昇ると=1。[-0.1,+0.1]の範囲で滑らかに遷移
+        // sunBlend: 0 when sun is fully below horizon, 1 when fully risen. Smooth transition over [-0.1, +0.1].
         float sunBlend = std::clamp((m_sunDir.y + 0.1f) / 0.2f, 0.0f, 1.0f);
         sunBlend = sunBlend * sunBlend * (3.0f - 2.0f * sunBlend); // smoothstep
-        // 太陽が沈む時は+0.1（月が地平線より少し高い）、太陽が昇る時は-0.1（月が少し低い）
+        // When sun sets: +0.1 (moon slightly above horizon); when sun rises: -0.1 (moon slightly below).
         float moonYOffset = std::lerp(0.1f, -0.1f, sunBlend);
 
         m_moonDir.x = -m_sunDir.x;
@@ -205,9 +205,9 @@ void SkyDome::Update(float deltaTime)
         m_moonDir.y /= len;
         m_moonDir.z /= len;
     }
-    // 月牙の向き：月軸周りに緩やかに回転する。太陽と独立しており約90秒で一周
+    // Crescent direction: slowly rotates around the moon axis. Independent from the sun, completes one revolution in ~90 seconds.
     {
-        // m_crescentDirをmoonDirに垂直な平面に投影して数値ドリフトを防ぐ
+        // Project m_crescentDir onto the plane perpendicular to moonDir to prevent numerical drift.
         float dotCM = m_crescentDir.x * m_moonDir.x + m_crescentDir.y * m_moonDir.y + m_crescentDir.z * m_moonDir.z;
         m_crescentDir.x -= dotCM * m_moonDir.x;
         m_crescentDir.y -= dotCM * m_moonDir.y;
@@ -215,11 +215,11 @@ void SkyDome::Update(float deltaTime)
         float clen = sqrtf(m_crescentDir.x * m_crescentDir.x + m_crescentDir.y * m_crescentDir.y + m_crescentDir.z * m_crescentDir.z);
         if (clen > 0.001f) { m_crescentDir.x /= clen; m_crescentDir.y /= clen; m_crescentDir.z /= clen; }
 
-        // RodriguesでmoonDir周りに小さな角度だけ回転する
+        // Rotate by a small angle around moonDir using Rodrigues' formula.
         float rotSpeed = deltaTime * m_crescentRotSpeed;
         float cosA = cosf(rotSpeed), sinA = sinf(rotSpeed);
         XMFLOAT3 k = m_moonDir, v = m_crescentDir;
-        // k×v（vは既にkに垂直。dot(k,v)≈0なので公式はv*cos + (k×v)*sinに簡略化）
+        // k×v (v is already perpendicular to k; since dot(k,v)≈0 the formula simplifies to v*cos + (k×v)*sin)
         XMFLOAT3 crossKV = {
             k.y * v.z - k.z * v.y,
             k.z * v.x - k.x * v.z,
@@ -232,21 +232,21 @@ void SkyDome::Update(float deltaTime)
         };
     }
 
-    // 稲妻
+    // Lightning
     m_lightningCooldown -= deltaTime;
     if (m_weatherIntensity > 0.7f && m_lightningCooldown <= 0.0f && m_lightningIntensity <= 0.0f)
     {
-        float r = fabsf(sinf(m_time * 127.3f)); // 疑似乱数 0..1
+        float r = fabsf(sinf(m_time * 127.3f)); // pseudo-random 0..1
         m_lightningIntensity = 0.4f + r * 0.6f;
-        m_lightningCooldown  = 2.0f + r * 6.0f; // 次の発生間隔：2〜8秒
+        m_lightningCooldown  = 2.0f + r * 6.0f; // next strike interval: 2~8 seconds
     }
     if (m_lightningIntensity > 0.0f)
     {
-        m_lightningIntensity -= deltaTime * 5.0f; // 約0.2秒で0に減衰する
+        m_lightningIntensity -= deltaTime * 5.0f; // decays to 0 in ~0.2 seconds
         if (m_lightningIntensity < 0.0f) m_lightningIntensity = 0.0f;
     }
 
-    // 雲パラメータ
+    // Cloud parameters
     float cycle1 = sinf(m_time * 0.2f) * 0.5f + 0.5f;
     float cycle2 = cosf(m_time * 0.15f) * 0.5f + 0.5f;
     m_cloudDensity = 0.5f + cycle1 * 0.1f;
@@ -256,15 +256,15 @@ void SkyDome::Update(float deltaTime)
 
 void SkyDome::Render(RenderContext& ctx)
 {
-    // ctxからview/projを取得する。天空球はカメラに追従する（回転のみ、平行移動は除外）
-    // ctxを構築する際にview行列とproj行列を渡す必要がある
+    // Obtain view/proj from ctx. The sky sphere follows the camera (rotation only, no translation).
+    // The view and proj matrices must be passed when constructing ctx.
 
     float skyScale = m_showcaseMode ? 400.0f : 1000.0f;
     XMMATRIX scale = XMMatrixScaling(skyScale, skyScale, skyScale);
-    // 注意：天空球からは平行移動成分を除き、回転のみを保持する
-    // ビュー行列から回転部分を抽出する（第4列の平行移動をクリアする）
+    // Note: remove the translation component from the view matrix for the sky sphere, keeping rotation only.
+    // Extract the rotation part from the view matrix (clear the translation in row[3]).
     XMMATRIX viewForSky = ctx.view;
-    if (!m_showcaseMode) // 通常モードのみ平行移動を除去する
+    if (!m_showcaseMode) // remove translation only in normal mode
     {
         viewForSky.r[3] = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
     }
@@ -273,7 +273,7 @@ void SkyDome::Render(RenderContext& ctx)
 
     XMMATRIX viewProj = scale * viewForSky * ctx.proj;
 
-    // CBVを更新する
+    // Update CBV
     SkyCB cb;
     cb.viewProj = XMMatrixTranspose(viewProj);
     // Dynamic sky gradient: night → sunset → day
@@ -343,7 +343,7 @@ void SkyDome::Render(RenderContext& ctx)
     cb.padCam1 = cb.padCam2 = cb.padCam3 = 0.0f;
     memcpy(m_cbMapped, &cb, sizeof(cb));
 
-    // 天空PSOに切り替える
+    // Switch to sky PSO
     ctx.cmd->SetPipelineState(m_skyPSO.Get());
     ctx.cmd->SetGraphicsRootSignature(m_rootSignature.Get());
     ctx.cmd->SetGraphicsRootConstantBufferView(
@@ -359,32 +359,32 @@ void SkyDome::Render(RenderContext& ctx)
 }
 
 
-// 太陽の高さに応じて強度を計算する：地平線以下では強度が0になる
+// Calculate intensity based on sun elevation: intensity falls to 0 below the horizon.
 float SkyDome::GetSunIntensity() const
 {
-    // m_sunDir.yは太陽の垂直成分
-    // 正午はy≈1（最明）、日没はy≈0（地平線）、夜はy<0（消灯）
-    // 0.1を加えることで日没後もわずかな余光を持たせる
+    // m_sunDir.y is the vertical component of the sun direction.
+    // Noon: y≈1 (brightest), sunset: y≈0 (horizon), night: y<0 (off).
+    // Adding 0.1 provides a slight afterglow after sunset.
     float baseIntensity = saturate(m_sunDir.y + 0.1f);
-    // 嵐時は太陽強度が20%に低下する
+    // During storms sun intensity drops to 20%.
     return baseIntensity * (1.0f - m_weatherIntensity * 0.8f);
 }
 
 XMFLOAT3 SkyDome::GetSunColor() const
 {
-    float h = m_sunDir.y; // -1〜1
+    float h = m_sunDir.y; // -1 to 1
 
-    // 日没はオレンジレッド寄り、正午は白寄り
+    // Sunset leans toward orange-red, noon leans toward white.
     float t = saturate(h);
-    XMFLOAT3 sunsetColor = { 1.0f, 0.4f, 0.1f }; // 日没オレンジレッド
-    XMFLOAT3 noonColor = { 1.0f, 0.95f, 0.8f }; // 正午の暖かい白
+    XMFLOAT3 sunsetColor = { 1.0f, 0.4f, 0.1f }; // sunset orange-red
+    XMFLOAT3 noonColor = { 1.0f, 0.95f, 0.8f }; // warm white at noon
 
     XMFLOAT3 baseColor = XMFLOAT3(
         sunsetColor.x + (noonColor.x - sunsetColor.x) * t,
         sunsetColor.y + (noonColor.y - sunsetColor.y) * t,
         sunsetColor.z + (noonColor.z - sunsetColor.z) * t);
 
-    // 嵐時は色がグレーに変わる
+    // During storms the color shifts toward gray.
     XMFLOAT3 stormColor = { 0.6f, 0.6f, 0.65f };
     return XMFLOAT3(
         baseColor.x + (stormColor.x - baseColor.x) * m_weatherIntensity,
@@ -392,14 +392,14 @@ XMFLOAT3 SkyDome::GetSunColor() const
         baseColor.z + (stormColor.z - baseColor.z) * m_weatherIntensity);
 }
 
-// 空の主色：太陽の高さに応じて夜の青から昼の青へ変化する
+// Primary sky color: transitions from night blue to daytime blue based on sun elevation.
 XMFLOAT3 SkyDome::GetSkyColor() const
 {
-    float h = saturate(m_sunDir.y + 0.2f);  // 若干早めに明るくなる
+    float h = saturate(m_sunDir.y + 0.2f);  // brightens slightly earlier
 
-    // 夜の深い青
+    // Deep blue of night
     XMFLOAT3 nightColor = { 0.05f, 0.05f, 0.15f };
-    // 昼の空色
+    // Daytime sky blue
     XMFLOAT3 dayColor = { 0.4f,  0.6f,  0.9f };
 
     return XMFLOAT3(

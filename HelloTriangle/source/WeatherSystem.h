@@ -4,9 +4,9 @@
 
 enum class WeatherState
 {
-    Calm,    // 平静
-    Windy,   // 有风
-    Storm,   // 暴风
+    Calm,    // calm
+    Windy,   // windy
+    Storm,   // storm
 };
 
 struct WeatherParams
@@ -46,6 +46,6 @@ private:
     float m_transitionElapsed = 0.0f;
     bool  m_inTransition = false;
     float m_time = 0.0f;
-	bool  m_autoWeather = true; // 是否自动循环天气状态
+	bool  m_autoWeather = true; // Whether to automatically cycle through weather states
     static WeatherParams GetPreset(WeatherState state);
 };

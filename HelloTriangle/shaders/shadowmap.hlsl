@@ -1,7 +1,7 @@
 // ============================================================
 // shadowmap.hlsl
-// 浮遊物体の深度パスシェーダー。
-// ライト空間へ変換してシャドウマップに深度のみを書き込む。
+// Depth-pass shader for floating objects.
+// Transforms to light space and writes depth only to the shadow map.
 // ============================================================
 cbuffer ShadowInstCB : register(b0)
 {

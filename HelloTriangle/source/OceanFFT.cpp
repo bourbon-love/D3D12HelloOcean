@@ -1,6 +1,7 @@
 ﻿#include "OceanFFT.h"
 #include <d3dx12_barriers.h>
 #include <d3dx12_root_signature.h>
+#include "../GpuMarkers.h"
 
 struct PhillipsCB
 {
@@ -64,37 +65,37 @@ void OceanFFT::CreateTextures()
     texDesc.SampleDesc.Count = 1;
     texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
-    // h0
+    // h0 spectrum
     ThrowIfFailed(m_device->CreateCommittedResource(
         &heapProp, D3D12_HEAP_FLAG_NONE, &texDesc,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
         IID_PPV_ARGS(&m_h0Map)));
 
-    // hkt: h(k,t) + Dx(k,t)
+    // hkt: h(k,t) + Dx(k,t) frequency domain
     ThrowIfFailed(m_device->CreateCommittedResource(
         &heapProp, D3D12_HEAP_FLAG_NONE, &texDesc,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
         IID_PPV_ARGS(&m_hktMap)));
 
-    // heightMap: h+Dx IFFT最终结果
+    // heightMap: final IFFT result for h+Dx
     ThrowIfFailed(m_device->CreateCommittedResource(
         &heapProp, D3D12_HEAP_FLAG_NONE, &texDesc,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
         IID_PPV_ARGS(&m_heightMap)));
 
-    // tempMap: h+Dx IFFT pingpong缓冲
+    // tempMap: ping-pong buffer for h+Dx IFFT
     ThrowIfFailed(m_device->CreateCommittedResource(
         &heapProp, D3D12_HEAP_FLAG_NONE, &texDesc,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
         IID_PPV_ARGS(&m_tempMap)));
 
-    // dztMap: Dz(k,t) 频域；IFFT后存Dz结果
+    // dztMap: Dz(k,t) frequency domain; stores Dz result after IFFT
     ThrowIfFailed(m_device->CreateCommittedResource(
         &heapProp, D3D12_HEAP_FLAG_NONE, &texDesc,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
         IID_PPV_ARGS(&m_dztMap)));
 
-    // dztTempMap: Dz IFFT pingpong缓冲
+    // dztTempMap: ping-pong buffer for Dz IFFT
     ThrowIfFailed(m_device->CreateCommittedResource(
         &heapProp, D3D12_HEAP_FLAG_NONE, &texDesc,
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
@@ -116,7 +117,7 @@ void OceanFFT::CreateDescriptorHeaps()
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Texture2D.MipLevels     = 1;
 
-    // phillipsHeap: 1个槽，h0 UAV
+    // phillipsHeap: 1 slot, h0 UAV
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc = {};
         desc.NumDescriptors = 1;
@@ -133,7 +134,7 @@ void OceanFFT::CreateDescriptorHeaps()
             m_phillipsHeap->GetCPUDescriptorHandleForHeapStart());
     }
 
-    // TimeEvo heap: slot0=h0 SRV, slot1=hkt UAV, slot2=dztMap UAV
+    // TimeEvo heap: slot0=h0 SRV, slot1=hkt UAV, slot2=dztMap UAV (3 slots total)
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc = {};
         desc.NumDescriptors = 3;
@@ -150,7 +151,7 @@ void OceanFFT::CreateDescriptorHeaps()
         m_device->CreateUnorderedAccessView(m_dztMap.Get(), nullptr, &uavDesc, cpu);
     }
 
-    // IFFT h+Dx heap: slot0=hkt UAV, slot1=tempMap UAV
+    // IFFT h+Dx heap: slot0=hkt UAV, slot1=tempMap UAV (2 slots total)
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc = {};
         desc.NumDescriptors = 2;
@@ -165,7 +166,7 @@ void OceanFFT::CreateDescriptorHeaps()
         m_device->CreateUnorderedAccessView(m_tempMap.Get(), nullptr, &uavDesc, cpu);
     }
 
-    // IFFT Dz heap: slot0=dztMap UAV, slot1=dztTempMap UAV
+    // IFFT Dz heap: slot0=dztMap UAV, slot1=dztTempMap UAV (2 slots total)
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc = {};
         desc.NumDescriptors = 2;
@@ -180,7 +181,7 @@ void OceanFFT::CreateDescriptorHeaps()
         m_device->CreateUnorderedAccessView(m_dztTempMap.Get(), nullptr, &uavDesc, cpu);
     }
 
-    // srvHeap: slot0=heightMap SRV, slot1=dztMap SRV
+    // srvHeap: slot0=heightMap SRV, slot1=dztMap SRV (2 slots total)
     {
         D3D12_DESCRIPTOR_HEAP_DESC desc = {};
         desc.NumDescriptors = 2;
@@ -329,7 +330,7 @@ void OceanFFT::RunPhillipsInit(ComPtr<ID3D12CommandQueue> cmdQueue)
         m_initAllocator.Get(), nullptr,
         IID_PPV_ARGS(&m_initCmdList)));
 
-    // Phillips CB数据
+    // Fill Phillips CB data
     PhillipsCB cb;
     cb.N = m_textureSize;
     cb.A =0.3f;
@@ -339,9 +340,9 @@ void OceanFFT::RunPhillipsInit(ComPtr<ID3D12CommandQueue> cmdQueue)
     cb.pad0 = cb.pad1 = cb.pad2 = 0.0f;
     memcpy(m_phillipsCBMapped, &cb, sizeof(cb));
 
-    // 录制Phillips CS
-    // 注意：Phillips需要h0的UAV，而h0在csHeap的slot0是SRV
-    // 所以Phillips用独立的临时UAV Heap
+    // Record Phillips CS
+    // Note: Phillips needs UAV for h0, but h0 in csHeap slot0 is an SRV
+    // so Phillips uses its own temporary UAV heap
     D3D12_DESCRIPTOR_HEAP_DESC tmpHeapDesc = {};
     tmpHeapDesc.NumDescriptors = 1;
     tmpHeapDesc.Type = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
@@ -370,7 +371,7 @@ void OceanFFT::RunPhillipsInit(ComPtr<ID3D12CommandQueue> cmdQueue)
     m_initCmdList->Dispatch(
         m_textureSize / 8, m_textureSize / 8, 1);
 
-    // h0写完转为SRV，供TimeEvo读取
+    // After h0 write, transition to SRV for TimeEvo to read
     auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
         m_h0Map.Get(),
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -381,7 +382,7 @@ void OceanFFT::RunPhillipsInit(ComPtr<ID3D12CommandQueue> cmdQueue)
     ID3D12CommandList* cmds[] = { m_initCmdList.Get() };
     cmdQueue->ExecuteCommandLists(1, cmds);
 
-    // 等待GPU完成，用局部Fence
+    // Wait for GPU completion using a local fence
     ComPtr<ID3D12Fence> fence;
     ThrowIfFailed(m_device->CreateFence(
         0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence)));
@@ -401,9 +402,11 @@ void OceanFFT::Dispatch(
     UINT descSize = m_device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
-    // Pass 0: Phillips 重新生成 h0
+    PIXBeginEvent(cmdList.Get(), PIX_COLOR(255, 140, 0), L"OceanFFT");
+
+    // Pass 0: JONSWAP h0 regeneration
     {
-        // h0 先从 SRV 转回 UAV
+        PIXBeginEvent(cmdList.Get(), PIX_COLOR(255, 200, 50), L"JONSWAP h0");
         auto toUAV = CD3DX12_RESOURCE_BARRIER::Transition(
             m_h0Map.Get(),
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
@@ -430,16 +433,17 @@ void OceanFFT::Dispatch(
             1, m_phillipsCB->GetGPUVirtualAddress());
         cmdList->Dispatch(m_textureSize / 8, m_textureSize / 8, 1);
 
-        // h0 写完转回 SRV
         auto toSRV = CD3DX12_RESOURCE_BARRIER::Transition(
             m_h0Map.Get(),
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         cmdList->ResourceBarrier(1, &toSRV);
+        PIXEndEvent(cmdList.Get());
     }
 
-    // Pass 1: TimeEvo
+    // Pass 1: Time evolution
     {
+        PIXBeginEvent(cmdList.Get(), PIX_COLOR(255, 220, 80), L"TimeEvolution");
         ID3D12DescriptorHeap* heaps[] = { m_timeEvoHeap.Get() };
         cmdList->SetDescriptorHeaps(1, heaps);
         auto gpu = m_timeEvoHeap->GetGPUDescriptorHandleForHeapStart();
@@ -452,7 +456,7 @@ void OceanFFT::Dispatch(
         cmdList->SetComputeRootSignature(m_timeEvoRootSig.Get());
         cmdList->SetPipelineState(m_timeEvoPSO.Get());
         cmdList->SetComputeRootDescriptorTable(0, h0SRV);
-        cmdList->SetComputeRootDescriptorTable(1, hktUAV); // u0=hkt, u1=dztMap 连续
+        cmdList->SetComputeRootDescriptorTable(1, hktUAV);
         cmdList->SetComputeRootConstantBufferView(2, m_timeCB->GetGPUVirtualAddress());
         cmdList->Dispatch(m_textureSize / 8, m_textureSize / 8, 1);
 
@@ -461,10 +465,12 @@ void OceanFFT::Dispatch(
             CD3DX12_RESOURCE_BARRIER::UAV(m_dztMap.Get())
         };
         cmdList->ResourceBarrier(2, bs);
+        PIXEndEvent(cmdList.Get());
     }
 
     // Pass 2: h+Dx IFFT
     {
+        PIXBeginEvent(cmdList.Get(), PIX_COLOR(200, 240, 100), L"IFFT h+Dx");
         ID3D12DescriptorHeap* heaps[] = { m_ifftHeap.Get() };
         cmdList->SetDescriptorHeaps(1, heaps);
         auto pp0UAV = m_ifftHeap->GetGPUDescriptorHandleForHeapStart();
@@ -502,10 +508,12 @@ void OceanFFT::Dispatch(
         {
             ifftCB.stepSize = step; ifftCB.pingpong = pp; dispatchAndBarrier();
         }
+        PIXEndEvent(cmdList.Get());
     }
 
     // Pass 3: Dz IFFT
     {
+        PIXBeginEvent(cmdList.Get(), PIX_COLOR(160, 220, 100), L"IFFT Dz");
         ID3D12DescriptorHeap* heaps[] = { m_ifftDzHeap.Get() };
         cmdList->SetDescriptorHeaps(1, heaps);
         auto pp0UAV = m_ifftDzHeap->GetGPUDescriptorHandleForHeapStart();
@@ -514,7 +522,7 @@ void OceanFFT::Dispatch(
         cmdList->SetPipelineState(m_ifftPSO.Get());
 
         IFFTCB ifftCB; ifftCB.N = m_textureSize;
-        UINT passCount = 16; // h+Dx已用0~15，从16开始
+        UINT passCount = 16;
 
         auto dispatchAndBarrier = [&]()
             {
@@ -543,7 +551,10 @@ void OceanFFT::Dispatch(
         {
             ifftCB.stepSize = step; ifftCB.pingpong = pp; dispatchAndBarrier();
         }
+        PIXEndEvent(cmdList.Get());
     }
+
+    PIXEndEvent(cmdList.Get()); // OceanFFT
 
     // Pass 4: CopyResource hkt → heightMap
     {
