@@ -22,7 +22,7 @@ XMMATRIX Camera::GetViewMatrix() const
 XMMATRIX Camera::GetProjMatrix() const
 {
     XMMATRIX proj = XMMatrixPerspectiveFovLH(fov, aspect, nearZ, farZ);
-    // TAAジッター：row[2]のx/y成分にNDCオフセットを加算（clip.x += jitter.x * pos.z）
+    // TAA jitter: add NDC offset to x/y of row[2] (clip.x += jitter.x * pos.z)
     proj.r[2] = XMVectorSetX(proj.r[2], XMVectorGetX(proj.r[2]) + m_jitter.x);
     proj.r[2] = XMVectorSetY(proj.r[2], XMVectorGetY(proj.r[2]) + m_jitter.y);
     return proj;
@@ -38,17 +38,17 @@ void Camera::ProcessMouse(float deltaX, float deltaY)
 
 void Camera::Move(float forwardDelta, float rightDelta)
 {
-    // 1️⃣ 前方向（只在水平面移动！）
+    // 1. Forward direction (horizontal movement only)
     XMVECTOR forward = XMVectorSet(
         cosf(m_pitch) * sinf(m_yaw),
-        0.0f, // 👈 锁地面（关键）
+        0.0f, // Lock to ground plane (key)
         cosf(m_pitch) * cosf(m_yaw),
         0.0f
     );
 
     forward = XMVector3Normalize(forward);
 
-    // 2️D 右方向
+    // 2. Right direction
     XMVECTOR right = XMVector3Cross(
         XMVectorSet(0, 1, 0, 0), // up
         forward
@@ -56,7 +56,7 @@ void Camera::Move(float forwardDelta, float rightDelta)
 
     right = XMVector3Normalize(right);
 
-    // 3️D 位置更新
+    // 3. Update position
     XMVECTOR pos = XMLoadFloat3(&position);
 
     pos += forward * forwardDelta;

@@ -1,25 +1,25 @@
 // ============================================================
-// PhillipsCS.hlsl  (JONSWAPスペクトル)
-// JONSWAP海洋パワースペクトル初期化コンピュートシェーダー。
-// Phillipsスペクトルを置き換え、支配的な周期と方向性の高い
-// 波浪場を生成する。毎フレーム実行（風速変化に追従）。
+// PhillipsCS.hlsl  (JONSWAP spectrum)
+// JONSWAP ocean power spectrum initialization compute shader.
+// Replaces the Phillips spectrum to generate a dominant-period,
+// highly directional wave field. Executed every frame (tracks wind speed changes).
 // ============================================================
 RWTexture2D<float4> g_h0 : register(u0);
 
 cbuffer PhillipsCB : register(b0)
 {
-    uint  N;          // テクスチャサイズ（256）
-    float A;          // 振幅スケール（天気システムから渡される）
-    float windSpeed;  // 風速 U10 (m/s)
-    float windDirX;   // 正規化風向 X
-    float windDirY;   // 正規化風向 Z
+    uint  N;          // texture size (256)
+    float A;          // amplitude scale (passed from the weather system)
+    float windSpeed;  // wind speed U10 (m/s)
+    float windDirX;   // normalized wind direction X
+    float windDirY;   // normalized wind direction Z
     float pad0, pad1, pad2;
 };
 
 static const float PI  = 3.14159265f;
 static const float g   = 9.81f;
 
-// Wangハッシュ：疑似乱数シード
+// Wang hash: pseudo-random seed
 uint wangHash(uint seed)
 {
     seed = (seed ^ 61u) ^ (seed >> 16u);
@@ -30,7 +30,7 @@ uint wangHash(uint seed)
     return seed;
 }
 
-// Box-Muller変換：一様乱数 → ガウス乱数
+// Box-Muller transform: uniform random → Gaussian random
 float2 gaussianRandom(uint2 id)
 {
     uint seed0 = wangHash(id.x + id.y * N);
@@ -43,47 +43,48 @@ float2 gaussianRandom(uint2 id)
 }
 
 // ============================================================
-// JONSWAPスペクトル（波数域、2D）
+// JONSWAP spectrum (wavenumber domain, 2D)
 //
-// 導出：S(ω) = α g²/ω⁵ · exp(-5/4·(ωp/ω)⁴) · γ^r  を
-// 深水分散 ω=√(gk) で波数域に変換すると：
+// Derivation: convert S(ω) = α g²/ω⁵ · exp(-5/4·(ωp/ω)⁴) · γ^r
+// to the wavenumber domain using the deep-water dispersion relation ω=√(gk):
 //   Ψ(k) = S(ω) · dω/dk · 1/k = (α/2) · k⁻⁴ · PM · ENH · D(θ)
-// Phillipsと同じ k⁻⁴ 骨格を維持しつつ、支配周波数で鋭いピークを形成。
+// Retains the same k⁻⁴ skeleton as Phillips while forming a sharp peak
+// at the dominant frequency.
 // ============================================================
 float jonswap(float2 k)
 {
     float kLen = length(k);
     if (kLen < 1e-6f) return 0.0f;
 
-    // 深水角周波数
+    // Deep-water angular frequency
     float omega = sqrt(g * kLen);
 
-    // フェッチ（吹送距離）：風速から比例推定
-    // 穏やか U=10 → F=100km、嵐 U=75 → F=750km
+    // Fetch (wind fetch distance): estimated proportionally from wind speed
+    // Calm U=10 → F=100km, storm U=75 → F=750km
     float fetch  = max(windSpeed * 10000.0f, 1000.0f);
 
-    // JONSWAPピーク角周波数：ωp = 22·(g²/(U·F))^(1/3)
+    // JONSWAP peak angular frequency: ωp = 22·(g²/(U·F))^(1/3)
     float omegaP = 22.0f * pow(g * g / max(windSpeed * fetch, 1e-6f), 1.0f / 3.0f);
-    float kp     = omegaP * omegaP / g;  // ピーク波数
+    float kp     = omegaP * omegaP / g;  // peak wavenumber
 
-    // Pierson-Moskowitz包絡：exp(-5/4·(kp/k)²)
-    // Phillipsの exp(-1/(kL)²) を置き換え；支配波長より長い成分を強く抑制
+    // Pierson-Moskowitz envelope: exp(-5/4·(kp/k)²)
+    // Replaces Phillips' exp(-1/(kL)²); strongly suppresses components longer than the dominant wavelength
     float pm = exp(-1.25f * (kp / kLen) * (kp / kLen));
 
-    // JONSWAPピーク増強：γ^r（γ=3.3 標準値）
-    // 支配周波数付近の波高を最大3.3倍増強し、規則的な波列を形成
+    // JONSWAP peak enhancement: γ^r (γ=3.3 standard value)
+    // Amplifies wave height near the dominant frequency by up to 3.3x, forming a regular wave train
     float sigma = (omega <= omegaP) ? 0.07f : 0.09f;
     float r     = exp(-(omega - omegaP) * (omega - omegaP)
                       / (2.0f * sigma * sigma * omegaP * omegaP));
     float enh   = pow(3.3f, r);
 
-    // 方向拡散：追い風方向の波のみ（逆行波をゼロに）
+    // Directional spreading: only downwind waves (zero out counter-propagating waves)
     float2 kDir  = k / kLen;
     float2 wDir  = normalize(float2(windDirX, windDirY));
     float  kdotw = dot(kDir, wDir);
     float  spread = max(0.0f, kdotw) * max(0.0f, kdotw);
 
-    // 極短波カット（数値安定性）
+    // Very short wave cut (numerical stability)
     float Lw = windSpeed * windSpeed / g;
     float lc = Lw * 0.001f;
     float cut = exp(-kLen * kLen * lc * lc);
@@ -95,7 +96,7 @@ float jonswap(float2 k)
 [numthreads(8, 8, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID)
 {
-    // ピクセル座標 → 波数空間（中心: k=0）
+    // Pixel coordinates → wavenumber space (center: k=0)
     float2 k;
     static const float L = 400.0f;
     k.x = (float(id.x) - float(N) * 0.5f) * (2.0f * PI / L);

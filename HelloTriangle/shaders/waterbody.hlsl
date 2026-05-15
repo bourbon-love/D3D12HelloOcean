@@ -1,6 +1,6 @@
 // ============================================================
 // waterbody.hlsl
-// 水体バウンディングボックスの半透明描画シェーダー。
+// Semi-transparent rendering shader for the water body bounding box.
 // ============================================================
 cbuffer SceneCB : register(b0)
 {
@@ -71,30 +71,30 @@ VSOutput VSMain(VSInput vin)
 
 float4 PSMain(VSOutput pin) : SV_TARGET
 {
-    // 基本の水体色：深い青、半透明
+    // Base water body color: deep blue, semi-transparent
     float3 deepColor = float3(0.02f, 0.12f, 0.3f);
     float3 surfaceColor = float3(0.08f, 0.3f, 0.6f);
 
-    // 深さに応じて色を補間：深いほど暗くなる
+    // Interpolate color by depth: darker at greater depths
     float depthFactor = saturate(-pin.posW.y / 200.0f);
     float3 waterColor = lerp(surfaceColor, deepColor, depthFactor);
 
-    // Fresnel：視線が面と平行になるほど透明になる
+    // Fresnel: more transparent as view angle becomes grazing
     float3 V = normalize(cameraPos - pin.posW);
-    float3 N = float3(0.0f, 0.0f, 1.0f); // デフォルト法線は前方向、実際は面が決める
+    float3 N = float3(0.0f, 0.0f, 1.0f); // default normal is forward; actual surface determines it
     float NdotV = abs(dot(N, V));
     float fresnel = 1.0f - saturate(NdotV);
     fresnel = pow(fresnel, 2.0f);
 
-    // 太陽光散乱：水体に光感を与える
+    // Sun light scatter: gives the water body a sense of illumination
     float3 L = sunDir;
     float sunScatter = saturate(dot(L, float3(0.0f, -1.0f, 0.0f)));
     waterColor += sunColor * sunScatter * sunIntensity * 0.3f;
 
-    // アルファ：正面から見ると透明、斜めから見ると不透明
+    // Alpha: transparent when viewed straight-on, opaque at grazing angles
     float alpha = lerp(0.5f, 0.85f, fresnel);
 
-    // 霧
+    // Fog
     float dist = length(cameraPos - pin.posW);
     float fogFactor = saturate((dist - fogStart) / (fogEnd - fogStart));
     waterColor = lerp(waterColor, skyColor, fogFactor * 0.5f);

@@ -13,7 +13,7 @@ void RainSystem::Init(
     m_rainRootSig = rootSignature;
     m_drops.reserve(MAX_RAINDROPS);
 
-    // 创建独立 root signature，只需要 CBV
+    // Create an independent root signature that only needs a CBV
     ComPtr<ID3DBlob> sig, err;
     CD3DX12_ROOT_PARAMETER1 params[1];
     params[0].InitAsConstantBufferView(0);
@@ -28,7 +28,7 @@ void RainSystem::Init(
         0, sig->GetBufferPointer(), sig->GetBufferSize(),
         IID_PPV_ARGS(&m_rainRootSig)));
 
-    // 动态 VB（Upload Heap，每帧 CPU 写入）
+    // Dynamic VB (Upload Heap, CPU-written every frame)
     auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     auto bufDesc = CD3DX12_RESOURCE_DESC::Buffer(
         MAX_RAINDROPS * VERTS_PER_DROP * sizeof(RainVertex));
@@ -136,20 +136,20 @@ void RainSystem::Update(float deltaTime, float intensity, float windDirX, float 
     m_windDirX = windDirX;
     m_windDirY = windDirY;
 
-    // 目标雨滴数量随强度变化
+    // Target raindrop count varies with intensity
     UINT targetDrops = static_cast<UINT>(intensity * MAX_RAINDROPS);
 
-    // 更新现有雨滴位置
+    // Update existing raindrop positions
     UINT activeCount = 0;
-    // 雨滴落地时生成涟漪
+    // Spawn ripples when raindrops hit the surface
     for (auto& drop : m_drops)
     {
-        // 更新位置
+        // Update position
         drop.position.y -= drop.speed * deltaTime;
         drop.position.x += m_windDirX * m_intensity * 20.0f * deltaTime;
         drop.position.z += m_windDirY * m_intensity * 20.0f * deltaTime;
 
-        // 检测落地生成涟漪
+        // Detect surface contact and generate ripples
         if (drop.position.y <= 0.0f && drop.position.y > -drop.speed * deltaTime)
         {
             if (m_ripples.size() < MAX_RIPPLES && m_intensity > 0.01f)
@@ -165,14 +165,14 @@ void RainSystem::Update(float deltaTime, float intensity, float windDirX, float 
         }
     }
 
-    // 更新涟漪
+    // Update ripples
     for (auto& r : m_ripples)
     {
         r.age += deltaTime;
         r.radius = (r.age / r.lifetime) * r.maxRadius;
     }
 
-    // 移除过期涟漪
+    // Remove expired ripples
     m_ripples.erase(
         std::remove_if(m_ripples.begin(), m_ripples.end(),
             [](const Ripple& r) { return r.age >= r.lifetime; }),
@@ -180,7 +180,7 @@ void RainSystem::Update(float deltaTime, float intensity, float windDirX, float 
 
     
 
-    // 写入 RippleCB
+    // Write RippleCB
     UINT count = static_cast<UINT>(
         min(m_ripples.size(), (size_t)MAX_RIPPLES));
     for (UINT i = 0; i < count; ++i)
@@ -189,21 +189,21 @@ void RainSystem::Update(float deltaTime, float intensity, float windDirX, float 
         float t = r.age / r.lifetime;
         m_rippleCBMapped->ripples[i].positions = r.position;
         m_rippleCBMapped->ripples[i].radius = r.radius;
-        m_rippleCBMapped->ripples[i].strength = (1.0f - t) * m_intensity; // 随时间消退
+        m_rippleCBMapped->ripples[i].strength = (1.0f - t) * m_intensity; // fades over time
     }
     m_rippleCBMapped->rippleCount = count;
-    // 移除落地的雨滴
+    // Remove raindrops that have hit the surface
     m_drops.erase(
         std::remove_if(m_drops.begin(), m_drops.end(),
             [](const RainDrop& d) { return d.position.y <= -10.0f; }),
         m_drops.end());
 
-    // 补充新雨滴
+    // Replenish new raindrops
     XMFLOAT3 camPos = { 0.0f, 0.0f, 0.0f };
     while (m_drops.size() < targetDrops)
         SpawnRainDrop(camPos);
 
-    // 写入 VB
+    // Write VB
     m_activeDrops = static_cast<UINT>(
         min(m_drops.size(), (size_t)MAX_RAINDROPS));
 
@@ -212,11 +212,11 @@ void RainSystem::Update(float deltaTime, float intensity, float windDirX, float 
         auto& drop = m_drops[i];
         UINT base = i * 2;
 
-        // 顶部顶点
+        // Top vertex
         m_rainVBMapped[base].position = drop.position;
         m_rainVBMapped[base].alpha = intensity * 0.6f;
 
-        // 风向偏移：暴风时倾斜更大，方向跟随 windDir
+        // Wind offset: greater tilt in storms, direction follows windDir
         float windOffsetX = drop.length * m_windDirX * m_intensity * 0.8f;
         float windOffsetZ = drop.length * m_windDirY * m_intensity * 0.8f;
 
@@ -224,7 +224,7 @@ void RainSystem::Update(float deltaTime, float intensity, float windDirX, float 
             drop.position.x + windOffsetX,
             drop.position.y - drop.length,
             drop.position.z + windOffsetZ);
-        m_rainVBMapped[base + 1].alpha = 0.0f; // 底部透明，渐变效果
+        m_rainVBMapped[base + 1].alpha = 0.0f; // bottom transparent for gradient effect
     }
 }
 
@@ -236,7 +236,7 @@ void RainSystem::Render(
    
     if (m_activeDrops == 0 || m_intensity < 0.01f) return;
 
-    // 更新 CB
+    // Update CB
     m_rainCBMapped->viewProj = XMMatrixTranspose(view * proj);
     m_rainCBMapped->alpha = m_intensity;
 
@@ -254,5 +254,5 @@ void RainSystem::Render(
 
 void RainSystem::InitResources(ComPtr<ID3D12GraphicsCommandList> cmdList)
 {
-    (void)cmdList; // Upload Heap 不需要 copy
+    (void)cmdList; // Upload Heap does not need a copy
 }

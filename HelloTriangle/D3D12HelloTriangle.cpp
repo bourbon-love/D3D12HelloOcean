@@ -2,6 +2,7 @@
 #include <d3dx12_root_signature.h>
 #include <d3dx12_barriers.h>
 #include <string>
+#include "GpuMarkers.h"
 
 extern "C" { __declspec(dllexport) extern const UINT D3D12SDKVersion = 618; }
 extern "C" { __declspec(dllexport) extern const char* D3D12SDKPath = ".\\D3D12\\"; }
@@ -182,6 +183,18 @@ void D3D12HelloTriangle::LoadAssets()
     m_skyDome = std::make_unique<SkyDome>();
     m_skyDome->InitPSO(m_device, m_rootSignature, m_width, m_height,
         pSkyVS, skyVsLen, pSkyPS, skyPsLen);
+
+    // VolumetricClouds
+    UINT8 *pCloudVS = nullptr, *pCloudPS = nullptr, *pCloudCompositePS = nullptr;
+    UINT   cloudVsLen = 0, cloudPsLen = 0, cloudCompositePsLen = 0;
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"clouds_CloudVS.cso").c_str(),     &pCloudVS,          &cloudVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"clouds_CloudPS.cso").c_str(),     &pCloudPS,          &cloudPsLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"clouds_CompositePS.cso").c_str(), &pCloudCompositePS, &cloudCompositePsLen));
+    m_volumetricClouds = std::make_unique<VolumetricClouds>();
+    m_volumetricClouds->Init(m_device, m_width, m_height,
+        pCloudVS, cloudVsLen, pCloudPS, cloudPsLen,
+        pCloudCompositePS, cloudCompositePsLen);
+    free(pCloudVS); free(pCloudPS); free(pCloudCompositePS);
 
     // RainSystem
     UINT8 *pRainVS = nullptr, *pRainPS = nullptr;
@@ -464,6 +477,17 @@ void D3D12HelloTriangle::BuildImGuiUI()
         if (ImGui::Button("Clear Fish")) m_fishSchool->ClearFish();
     }
 
+    ImGui::Separator(); ImGui::Text("--- Volumetric Clouds ---");
+    ImGui::Checkbox("Enable Clouds", &m_volumetricClouds->enabled);
+    if (m_volumetricClouds->enabled)
+    {
+        ImGui::SliderFloat("Coverage",    &m_volumetricClouds->cloudCoverage, 0.0f, 1.0f, "%.2f");
+        ImGui::SliderFloat("Density",     &m_volumetricClouds->densityMult,   0.1f, 3.0f, "%.2f");
+        ImGui::SliderFloat("Scale",       &m_volumetricClouds->cloudScale,    0.3f, 3.0f, "%.2f");
+        ImGui::SliderFloat("Base (m)",    &m_volumetricClouds->cloudBase,     200.0f, 2000.0f, "%.0f");
+        ImGui::SliderFloat("Top (m)",     &m_volumetricClouds->cloudTop,      500.0f, 5000.0f, "%.0f");
+    }
+
     ImGui::Separator(); ImGui::Text("--- Lens Flare ---");
     ImGui::Checkbox("Enable Lens Flare", &m_pp->lensFlareEnabled);
     if (m_pp->lensFlareEnabled)
@@ -480,7 +504,9 @@ void D3D12HelloTriangle::OnRender()
     ThrowIfFailed(m_commandAllocator->Reset());
     ThrowIfFailed(m_commandList->Reset(m_commandAllocator.Get(), nullptr));
 
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(30, 144, 255), L"Frame");
 
+    // ---- Compute: OceanFFT ----
     m_oceanFFT->Dispatch(m_commandList, m_renderer->GetTime());
     D3D12_RESOURCE_BARRIER toSRV[2] = {
         CD3DX12_RESOURCE_BARRIER::Transition(m_oceanFFT->GetHeightMap(),
@@ -490,9 +516,10 @@ void D3D12HelloTriangle::OnRender()
     };
     m_commandList->ResourceBarrier(2, toSRV);
 
-
+    // ---- ShadowMap ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(80, 80, 80), L"ShadowMap");
     m_pp->RenderShadowMap(m_commandList.Get(), m_skyDome.get(), m_renderer.get(), m_floatingObject.get());
-
+    PIXEndEvent(m_commandList.Get());
 
     RenderContext ctx;
     ctx.cmd          = m_commandList.Get();
@@ -507,41 +534,60 @@ void D3D12HelloTriangle::OnRender()
     ctx.view         = m_renderer->GetViewMatrix();
     ctx.proj         = m_renderer->GetProjMatrix();
 
-
     auto barrierToRT = CD3DX12_RESOURCE_BARRIER::Transition(
         ctx.renderTarget,
         D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
     m_commandList->ResourceBarrier(1, &barrierToRT);
-
 
     m_commandList->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
     const float clearColor[] = { 0.0f, 0.2f, 0.4f, 1.0f };
     m_commandList->ClearRenderTargetView(ctx.rtv, clearColor, 0, nullptr);
     m_commandList->ClearDepthStencilView(ctx.dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
 
-
+    // ---- SkyDome ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(100, 180, 255), L"SkyDome");
     m_skyDome->SetShowcaseMode(m_renderer->IsShowcaseMode());
     m_skyDome->Render(ctx);
+    PIXEndEvent(m_commandList.Get());
 
+    // ---- Volumetric Clouds ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(200, 220, 255), L"VolumetricClouds");
+    {
+        VolumetricClouds::Params cp;
+        cp.cameraPos        = m_renderer->GetCameraPos();
+        cp.time             = m_renderer->GetTime();
+        cp.sunDir           = m_skyDome->GetSunDirection();
+        cp.sunIntensity     = m_skyDome->GetSunIntensity();
+        cp.sunColor         = m_skyDome->GetSunColor();
+        cp.weatherIntensity = m_weatherSystem->GetWeatherIntensity();
+        cp.windX            = m_oceanFFT->windDirX;
+        cp.windZ            = m_oceanFFT->windDirY;
+        float sunH          = m_skyDome->GetSunDirection().y;
+        cp.nightFactor      = std::clamp(-sunH * 3.0f, 0.0f, 1.0f);
+        cp.view             = m_renderer->GetViewMatrix();
+        cp.proj             = m_renderer->GetProjMatrix();
+        m_volumetricClouds->Render(
+            m_commandList.Get(), ctx.rtv, m_viewport, m_scissorRect, cp);
+    }
+    PIXEndEvent(m_commandList.Get());
 
     m_pp->TakeSkySnapshot(m_commandList.Get());
     m_commandList->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
 
-
+    // ---- Underwater (FloatingObject + Fish) ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(0, 180, 160), L"Underwater");
     m_floatingObject->RenderUnderwater(ctx,
         m_skyDome->GetSunDirection(), m_skyDome->GetSunIntensity(),
         m_skyDome->GetSunColor(), m_renderer->GetCameraPos());
     m_fishSchool->Render(ctx,
         m_skyDome->GetSunDirection(), m_skyDome->GetSunIntensity(),
         m_skyDome->GetSunColor(), m_renderer->GetCameraPos(), m_renderer->GetTime());
-
+    PIXEndEvent(m_commandList.Get());
 
     m_pp->TakeRefractionSnapshot(m_commandList.Get());
     m_commandList->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
 
-
     m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
-
 
     auto* oceanHeap = m_pp->GetOceanSRVHeap();
     ID3D12DescriptorHeap* srvHeaps[] = { oceanHeap };
@@ -550,35 +596,49 @@ void D3D12HelloTriangle::OnRender()
     m_commandList->SetGraphicsRootConstantBufferView(2, m_rainSystem->GetRippleCBAddress());
     m_commandList->SetGraphicsRootConstantBufferView(3, m_pp->GetShadowSceneCBAddr());
 
-
+    // ---- Ocean ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(0, 100, 200), L"Ocean");
     m_renderer->Render(ctx);
-    m_renderer->RenderWaterBox(ctx);
+    // RenderWaterBox is for single-tile boundary box only; hidden in infinite ocean mode
     m_floatingObject->Render(ctx,
         m_skyDome->GetSunDirection(), m_skyDome->GetSunIntensity(),
         m_skyDome->GetSunColor(), m_renderer->GetCameraPos());
+    PIXEndEvent(m_commandList.Get());
+
+    // ---- Rain ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(150, 210, 255), L"Rain");
     m_rainSystem->Render(ctx,
         m_renderer->GetViewMatrix(), m_renderer->GetProjMatrix(),
         m_renderer->GetCameraPos());
+    PIXEndEvent(m_commandList.Get());
 
-
+    // ---- Effects (Lightning, SSAO) ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(255, 255, 100), L"Effects");
     m_pp->RenderLightning(m_commandList.Get());
     m_pp->RenderSSAO(m_commandList.Get(), m_renderer.get());
+    PIXEndEvent(m_commandList.Get());
 
-
+    // ---- PostProcess ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(200, 100, 255), L"PostProcess");
     auto swapRTV = CD3DX12_CPU_DESCRIPTOR_HANDLE(
         m_rtvHeap->GetCPUDescriptorHandleForHeapStart(),
         m_frameIndex, m_rtvDescriptorSize);
     m_pp->RenderPostProcess(
         m_commandList.Get(), m_frameIndex, swapRTV,
         m_renderer.get(), m_skyDome.get());
+    PIXEndEvent(m_commandList.Get());
 
-    // ImGui
+    // ---- ImGui ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(180, 180, 180), L"ImGui");
     {
         ID3D12DescriptorHeap* imguiHeaps[] = { m_imguiSrvHeap.Get() };
         m_commandList->SetDescriptorHeaps(1, imguiHeaps);
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), m_commandList.Get());
     }
+    PIXEndEvent(m_commandList.Get());
 
+
+    PIXEndEvent(m_commandList.Get()); // Frame
 
     auto barrierToPresent = CD3DX12_RESOURCE_BARRIER::Transition(
         ctx.renderTarget,

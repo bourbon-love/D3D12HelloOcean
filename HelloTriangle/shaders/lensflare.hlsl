@@ -1,7 +1,7 @@
 // ============================================================
 // lensflare.hlsl
-// レンズフレアシェーダー。
-// ゴーストフレア7本、アナモルフィックストリーク、太陽ハローを手続き的に生成する。
+// Lens flare shader.
+// Procedurally generates 7 ghost flares, an anamorphic streak, and a sun halo.
 // ============================================================
 cbuffer LensFlareCB : register(b0)
 {
@@ -29,11 +29,11 @@ float4 LensFlarePS(VSOut i) : SV_Target
 
     float2 uv     = i.uv;
     float2 sunPos = sunScreenPos;
-    float2 axis   = float2(0.5, 0.5) - sunPos; // 太陽→画面中心
+    float2 axis   = float2(0.5, 0.5) - sunPos; // sun → screen center
 
     float3 color = 0;
 
-    // フレア軸に沿ったゴーストフレア
+    // Ghost flares along the flare axis
     static const int NUM_GHOSTS = 7;
     static const float gScale[NUM_GHOSTS]  = { 0.40, 0.62, 0.88, 1.12, 1.45, 1.85, 2.45 };
     static const float gRadius[NUM_GHOSTS] = { 0.040, 0.090, 0.025, 0.060, 0.035, 0.080, 0.050 };
@@ -47,21 +47,21 @@ float4 LensFlarePS(VSOut i) : SV_Target
         float  glow = saturate(1.0 - dist);
         glow = glow * glow * glow;
 
-        // 各ゴーストに固有の色相を割り当て
+        // Assign a unique hue to each ghost
         float hue = (float)g / (float)NUM_GHOSTS;
         float3 gc;
-        if      (g == 0) gc = float3(1.0, 0.55, 0.10); // オレンジ
-        else if (g == 1) gc = float3(0.20, 0.50, 1.00); // ブルー
-        else if (g == 2) gc = float3(0.90, 0.90, 0.20); // イエロー
-        else if (g == 3) gc = float3(0.30, 0.90, 0.30); // グリーン
-        else if (g == 4) gc = float3(0.90, 0.20, 0.80); // ピンク
-        else if (g == 5) gc = float3(0.30, 0.80, 1.00); // シアン
-        else             gc = float3(1.00, 0.45, 0.10); // オレンジ
+        if      (g == 0) gc = float3(1.0, 0.55, 0.10); // orange
+        else if (g == 1) gc = float3(0.20, 0.50, 1.00); // blue
+        else if (g == 2) gc = float3(0.90, 0.90, 0.20); // yellow
+        else if (g == 3) gc = float3(0.30, 0.90, 0.30); // green
+        else if (g == 4) gc = float3(0.90, 0.20, 0.80); // pink
+        else if (g == 5) gc = float3(0.30, 0.80, 1.00); // cyan
+        else             gc = float3(1.00, 0.45, 0.10); // orange
 
         color += gc * glow * 0.35;
     }
 
-    // 太陽を通る水平アナモルフィックストリーク
+    // Horizontal anamorphic streak through the sun
     {
         float dy      = uv.y - sunPos.y;
         float streak  = exp(-dy * dy * 7000.0) * 0.28;
@@ -69,7 +69,7 @@ float4 LensFlarePS(VSOut i) : SV_Target
         color += float3(0.40, 0.65, 1.00) * streak * shimmer;
     }
 
-    // 太陽周辺の柔らかいハロー
+    // Soft halo around the sun
     {
         float2 d    = (uv - sunPos) * float2(aspectRatio, 1.0);
         float  dist = length(d);

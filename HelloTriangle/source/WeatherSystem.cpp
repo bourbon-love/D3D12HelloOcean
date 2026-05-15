@@ -44,7 +44,7 @@ void WeatherSystem::SetWeather(WeatherState state, float transitionTime)
 
 void WeatherSystem::Update(float deltaTime)
 {
-    // 自动天气联动
+    // Automatic weather linkage
     if (m_autoWeather && m_sky)
     {
         float sunY = m_sky->GetSunDirection().y;
@@ -57,7 +57,7 @@ void WeatherSystem::Update(float deltaTime)
         else
             autoState = WeatherState::Storm;
 
-        // 只在状态变化时触发切换，过渡时间10秒
+        // Only trigger a transition when the state changes; transition time is 10 seconds.
         if (autoState != m_targetState)
             SetWeather(autoState, 10.0f);
     }
@@ -68,7 +68,7 @@ void WeatherSystem::Update(float deltaTime)
         float t = m_transitionElapsed / m_transitionTime;
         t = std::clamp(t, 0.0f, 1.0f);
 
-        // smoothstep 让过渡更自然
+        // smoothstep makes the transition feel more natural
         float s = t * t * (3.0f - 2.0f * t);
 
         m_currentParams.windSpeed    = m_fromParams.windSpeed + s * (m_targetParams.windSpeed - m_fromParams.windSpeed);
@@ -82,13 +82,13 @@ void WeatherSystem::Update(float deltaTime)
         if (t >= 1.0f)
             m_inTransition = false;
     }
-    // 风向动态漂移
+    // Wind direction dynamic drift
     m_time += deltaTime;
 
-    // 基础风向角度缓慢变化
-    float baseAngle = m_time * 0.05f; // 缓慢旋转
+    // Base wind direction angle changes slowly
+    float baseAngle = m_time * 0.05f; // slow rotation
 
-    // 暴风时加入湍流，风向变化更剧烈
+    // During storms add turbulence so wind direction changes more dramatically
     float turbulence = m_currentParams.weatherIntensity * sinf(m_time * 0.3f) * 0.5f;
     float angle = baseAngle + turbulence;
 

@@ -5,6 +5,9 @@
 #include <cstdlib>
 #include <cmath>
 #include <vector>
+#include <algorithm>   // std::for_each
+#include <execution>   // std::execution::par_unseq
+#include <numeric>     // std::iota
 
 // ---------------------------------------------------------------
 void FishSchool::Init(
@@ -222,9 +225,12 @@ void FishSchool::SpawnSchool(int n)
 
         f.phase = (float)rand() / RAND_MAX * 6.2832f;
 
-        // Silver-blue with slight per-fish variation
-        float v = 0.60f + (float)rand() / RAND_MAX * 0.25f;
-        f.color = XMFLOAT4(v * 0.80f, v * 0.88f, v * 1.05f, 1.0f);
+        // Daylight: silver-blue body (rgb). Alpha stores a unique hue (0-1)
+        // for bioluminescence — reuses the random phase so each fish glows
+        // a different color without adding extra data.
+        float v   = 0.60f + (float)rand() / RAND_MAX * 0.25f;
+        float hue = f.phase / (2.0f * 3.14159265f);   // phase is already random [0, 2π]
+        f.color = XMFLOAT4(v * 0.80f, v * 0.88f, v * 1.05f, hue);
 
         m_fish.push_back(f);
     }
@@ -242,9 +248,20 @@ void FishSchool::Boids(float dt)
     const int N = (int)m_fish.size();
     if (!N) return;
 
+    // Build index array for use with parallel algorithms.
+    // We cannot use a raw pointer range here because par_unseq requires
+    // the iterator to be random-access, and int* qualifies.
+    std::vector<int>     indices(N);
+    std::iota(indices.begin(), indices.end(), 0);
+
     std::vector<XMFLOAT3> newVel(N);
 
-    for (int i = 0; i < N; ++i)
+    // --- Phase 1: compute new velocity for every fish ---
+    // Safe to parallelize: each i reads m_fish[*] (read-only) and
+    // writes newVel[i] exclusively. No two threads share a write target.
+    std::for_each(std::execution::par_unseq,
+        indices.begin(), indices.end(),
+        [&](int i)
     {
         XMVECTOR pi = XMLoadFloat3(&m_fish[i].pos);
         XMVECTOR vi = XMLoadFloat3(&m_fish[i].vel);
@@ -296,14 +313,18 @@ void FishSchool::Boids(float dt)
 
         XMVECTOR nv  = vi + steer * (dt * 3.0f);
         float    spd = XMVectorGetX(XMVector3Length(nv));
-        if      (spd > MAXSPD)              nv = XMVector3Normalize(nv) * MAXSPD;
-        else if (spd < MINSPD && spd > 1e-4f) nv = XMVector3Normalize(nv) * MINSPD;
-        else if (spd <= 1e-4f)              nv = vi;
+        if      (spd > MAXSPD)                 nv = XMVector3Normalize(nv) * MAXSPD;
+        else if (spd < MINSPD && spd > 1e-4f)  nv = XMVector3Normalize(nv) * MINSPD;
+        else if (spd <= 1e-4f)                 nv = vi;
 
         XMStoreFloat3(&newVel[i], nv);
-    }
+    });
 
-    for (int i = 0; i < N; ++i)
+    // --- Phase 2: integrate positions ---
+    // Safe to parallelize: each i reads/writes only m_fish[i].
+    std::for_each(std::execution::par_unseq,
+        indices.begin(), indices.end(),
+        [&](int i)
     {
         m_fish[i].vel = newVel[i];
         XMVECTOR p = XMLoadFloat3(&m_fish[i].pos);
@@ -311,16 +332,13 @@ void FishSchool::Boids(float dt)
         XMFLOAT3 np;
         XMStoreFloat3(&np, p + v * dt);
 
-        // Hard ceiling: prevent fish from breaching the mean water surface.
-        // DMAX is already conservative (-5m), but soft steering can overshoot,
-        // and wave troughs depress the visible surface further below zero.
         if (np.y > DMAX)
         {
             np.y = DMAX;
             if (m_fish[i].vel.y > 0.0f) m_fish[i].vel.y = 0.0f;
         }
         m_fish[i].pos = np;
-    }
+    });
 }
 
 // ---------------------------------------------------------------

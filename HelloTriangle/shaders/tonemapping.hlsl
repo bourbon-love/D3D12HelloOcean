@@ -1,6 +1,6 @@
 // ============================================================
 // tonemapping.hlsl
-// ACES トーンマッピング + ビネット + フィルムグレイン + 水中カメラ効果
+// ACES tone mapping + vignette + film grain + underwater camera effect
 // ============================================================
 Texture2D    g_hdr     : register(t0);
 Texture2D    g_bloom   : register(t1);
@@ -47,11 +47,11 @@ float3 ACESFilmic(float3 x)
 
 float4 ToneMapPS(VSOut i) : SV_Target
 {
-    // 水中ブレンド係数（0=水面上, 1=完全水中、2m で飽和）
+    // Underwater blend factor (0=above surface, 1=fully underwater, saturates at 2m)
     float uwBlend = saturate(-cameraY / 2.0);
     float uwDepth = max(0.0, -cameraY);
 
-    // 水中の場合、HDR サンプル UV に表面波の屈折ゆらぎを適用
+    // Underwater: apply surface wave refraction shimmer to HDR sample UV
     float2 sampleUV = i.uv;
     if (uwBlend > 0.001)
     {
@@ -69,13 +69,13 @@ float4 ToneMapPS(VSOut i) : SV_Target
 
     float3 ldr = ACESFilmic(hdr * ao * exposure + bloom * bloomStrength + godrays * godRayStrength);
 
-    // ビネット
+    // Vignette
     float2 centered = i.uv - 0.5;
     float  vigDist  = dot(centered, centered);
     float  vignette = 1.0 - smoothstep(0.10, 0.65, vigDist) * vignetteStrength;
     ldr *= vignette;
 
-    // フィルムグレイン
+    // Film grain
     float2 gUV  = i.uv * 800.0 + float2(time * 37.0, time * 53.0);
     float  grain = frac(sin(dot(floor(gUV), float2(127.1, 311.7))) * 43758.5453);
     grain = (grain - 0.5) * 2.0;
@@ -83,23 +83,28 @@ float4 ToneMapPS(VSOut i) : SV_Target
     ldr += grain * grainStrength * (1.0 - lum * 0.6);
 
     // ----------------------------------------------------------
-    // 水中カメラ効果
+    // Underwater camera effects
     // ----------------------------------------------------------
     if (uwBlend > 0.001)
     {
-        // Beer-Lambert 色吸収（赤が最も速く減衰）
+        // Beer-Lambert color absorption (clear tropical ocean coefficients).
+        // Previous values (0.28/0.08/0.025) modelled turbid coastal water:
+        // at 15 m, red was exp(-4.2)=0.015 — essentially black, destroying
+        // any warm-coloured bioluminescence. Clear ocean values (0.04/0.015/0.006)
+        // still produce a strong blue-green tint while keeping colours readable.
         float3 absorb = float3(
-            exp(-0.28 * uwDepth),
-            exp(-0.08 * uwDepth),
-            exp(-0.025 * uwDepth));
+            exp(-0.04  * uwDepth),   // red:   at 15 m → 0.55 (was 0.015)
+            exp(-0.015 * uwDepth),   // green: at 15 m → 0.80 (was 0.30)
+            exp(-0.006 * uwDepth));  // blue:  at 15 m → 0.91 (was 0.69)
         ldr *= lerp(float3(1.0, 1.0, 1.0), absorb, uwBlend);
 
-        // 深海フォグ（深いほど暗い青緑に）
+        // Deep ocean fog. Reduced density (0.020) so it doesn't replace 74% of
+        // the image with flat blue at 15 m (old 0.09 gave fogAmt = 0.74 there).
         float3 fogColor = float3(0.01, 0.07, 0.18);
-        float  fogAmt   = 1.0 - exp(-uwDepth * 0.09);
+        float  fogAmt   = 1.0 - exp(-uwDepth * 0.020);
         ldr = lerp(ldr, fogColor, fogAmt * uwBlend);
 
-        // コースティクス（水面から差し込む揺れる光紋、浅いほど強い）
+        // Caustics (rippling light patterns from the water surface; stronger at shallow depths)
         float causticStr = uwBlend * saturate(1.0 - uwDepth * 0.18);
         if (causticStr > 0.001)
         {
@@ -110,11 +115,11 @@ float4 ToneMapPS(VSOut i) : SV_Target
             ldr += c * 0.28 * causticStr;
         }
 
-        // 水中ビネット強化（周辺部をより暗く）
+        // Enhanced underwater vignette (darker periphery)
         float uwVig = smoothstep(0.15, 0.60, vigDist) * 0.5 * uwBlend;
         ldr *= (1.0 - uwVig);
 
-        // 全体を微かに青緑にシフト
+        // Shift the overall color slightly toward blue-green
         float3 uwTint = float3(0.75, 0.92, 1.08);
         ldr *= lerp(float3(1.0, 1.0, 1.0), uwTint, uwBlend * 0.35);
     }

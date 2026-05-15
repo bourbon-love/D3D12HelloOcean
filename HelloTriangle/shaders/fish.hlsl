@@ -1,4 +1,4 @@
-// fish.hlsl - 水中魚群インスタンシングシェーダー（Boids CPU シミュレーション + GPU 一括描画）
+// fish.hlsl - Underwater fish school instancing shader (Boids CPU simulation + GPU batched rendering)
 
 struct FishInstance
 {
@@ -41,7 +41,7 @@ VSOut FishVS(VSIn v)
     float3 up    = normalize(inst.up);
     float3 right = normalize(cross(up, fwd));
 
-    // 尾びれの揺れ（後方頂点のみ適用、t^2 ウェイトで振幅増大）
+    // Tail fin sway (applied only to rear vertices; amplitude grows with t^2 weight)
     float3 lp = v.pos;
     if (lp.x < 0.0)
     {
@@ -74,13 +74,45 @@ float4 FishPS(VSOut p) : SV_TARGET
     float  ambient = 0.35;
     float  rim     = max(0.0, dot(-N, L)) * sunIntensity * 0.20;
 
-    // Beer-Lambert water absorption (gentle, fish visible at -3 to -10m)
+    // Beer-Lambert water absorption — matches tonemapping.hlsl clear-ocean coefficients.
     float  depth  = max(0.0, -p.worldPos.y);
     float3 absorb = float3(
-        exp(-0.18 * depth),
-        exp(-0.05 * depth),
-        exp(-0.02 * depth));
+        exp(-0.07  * depth),
+        exp(-0.025 * depth),
+        exp(-0.010 * depth));
 
     float3 col = p.color.rgb * (ambient + diffuse + rim) * sunColor * absorb;
+
+    // Bioluminescence: colorful glow when underwater at night.
+    // The hue for each fish is stored in p.color.a (set at spawn from its random phase).
+    // Emission is not absorbed by water — the fish itself is the light source.
+    float underwaterBlend = saturate(-cameraPos.y / 2.0);       // 0 at surface, 1 at -2 m
+    // Moon intensity = 0.15, so multiplier 3.0 gives nightBlend = 0.55 at night
+    // (multiplier 5.0 only gave 0.25, which was too dim to see color variety).
+    float nightBlend      = saturate(1.0 - sunIntensity * 3.0); // 0 in daylight, ~0.55 at night
+    float biolumiStr      = underwaterBlend * nightBlend;
+
+    [branch]
+    if (biolumiStr > 0.001)
+    {
+        // Independent flicker per fish using its unique hue as a phase seed.
+        float flicker = 0.80 + 0.20 * sin(time * 2.3 + p.color.a * 6.283);
+
+        // Full-saturation rainbow: correct HSV(h,1,1)→RGB, offsets {0,4,2}.
+        float3 bioColor = saturate(abs(fmod(p.color.a * 6.0 + float3(0.0, 4.0, 2.0), 6.0) - 3.0) - 1.0);
+
+        // Pre-compensate for tonemapping.hlsl Beer-Lambert (same coefficients: 0.04/0.015).
+        float camDepth = max(0.0, -cameraPos.y);
+        float3 comp = min(float3(exp(0.04 * camDepth), exp(0.015 * camDepth), 1.0),
+                          float3(3.0, 1.5, 1.0));
+
+        // LERP the base silver-blue body color toward the bio emission target.
+        // Adding (+= ) doesn't work: the fish's blue body channel bleeds into every
+        // hue and collapses red/orange fish to purple after water absorption.
+        // Replacing (lerp) clears the body color and lets each hue read cleanly.
+        float3 glowTarget = bioColor * comp * 3.0 * flicker;
+        col = lerp(col, glowTarget, biolumiStr);
+    }
+
     return float4(col, 1.0);
 }

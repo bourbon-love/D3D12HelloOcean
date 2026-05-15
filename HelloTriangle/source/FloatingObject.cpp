@@ -243,7 +243,7 @@ void FloatingObject::RenderUnderwater(
         cb.sunColor      = uwSunColor;
         cb.gridWorldSize = 400.0f;
         cb.cameraPos     = cameraPos;
-        cb.dropOffset    = m_uwBoxes[i].pos.y;  // 負の値 → 波高 + 水深オフセット
+        cb.dropOffset    = m_uwBoxes[i].pos.y;  // negative value → wave height + water depth offset
     }
 
     auto* cmd = ctx.cmd;

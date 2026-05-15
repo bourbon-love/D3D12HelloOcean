@@ -1,8 +1,8 @@
 // ============================================================
 // floating_object.hlsl
-// 浮遊オブジェクト（木箱）シェーダー。
-// 高さマップをサンプリングして波面に沿った姿勢を決定し、
-// Phong照明で描画する。
+// Floating object (wooden crate) shader.
+// Samples the height map to determine orientation along the wave surface,
+// then renders with Phong lighting.
 // ============================================================
 Texture2D    g_heightMap : register(t0);
 SamplerState g_sampler   : register(s0);
@@ -10,12 +10,12 @@ SamplerState g_sampler   : register(s0);
 cbuffer ObjectCB : register(b0)
 {
     matrix  viewProj;
-    float3  worldPos;       // オブジェクト中心のXZ座標（Yは高さマップで決定）
+    float3  worldPos;       // object center XZ coordinates (Y determined by height map)
     float   objectScale;
     float3  sunDir;
     float   sunIntensity;
     float3  sunColor;
-    float   gridWorldSize;  // 通常400.0
+    float   gridWorldSize;  // typically 400.0
     float3  cameraPos;
     float   dropOffset; // Y offset above wave surface during fall
 };
@@ -30,10 +30,10 @@ struct VSOut
 
 static const float FFT_HEIGHT_SCALE = 1.0 / 1000.0;
 
-// ワールドXZ座標で高さマップをサンプリングし、ワールド空間の変位を返す
+// Sample the height map at world XZ coordinates and return world-space displacement.
 float SampleH(float2 xz)
 {
-    // 海洋シェーダーと同じUV計算：UV = xz / tileSize (WRAPサンプラー)
+    // Same UV calculation as the ocean shader: UV = xz / tileSize (WRAP sampler)
     float2 uv = xz / gridWorldSize;
     return -g_heightMap.SampleLevel(g_sampler, uv, 0).x * FFT_HEIGHT_SCALE;
 }
@@ -41,29 +41,29 @@ float SampleH(float2 xz)
 VSOut FloatObjVS(VSIn v)
 {
     float2 objXZ = worldPos.xz;
-    float  step  = gridWorldSize / 128.0; // 有限差分のステップ幅
+    float  step  = gridWorldSize / 128.0; // step size for finite differences
 
-    // 3点から波面法線を推定する
+    // Estimate wave surface normal from 3 points
     float h0 = SampleH(objXZ);
     float hR = SampleH(objXZ + float2(step, 0));
     float hF = SampleH(objXZ + float2(0, step));
 
-    // 上向き法線（有限差分）
+    // Upward normal (finite differences)
     float3 N = normalize(float3(h0 - hR, step, h0 - hF));
 
-    // 表面法線に整合するTBN基底を構築する
+    // Build a TBN basis aligned to the surface normal
     float3 ref   = (abs(N.x) < 0.9) ? float3(1, 0, 0) : float3(0, 0, 1);
     float3 right = normalize(cross(ref, N));
     float3 fwd   = normalize(cross(right, N));
 
-    // ローカル頂点をスケールして表面に整列させた後、ワールド座標に変換する
+    // Scale local vertices, align to the surface, then transform to world coordinates
     float3 scaled = v.pos * objectScale;
     float3 wp = float3(objXZ.x, h0 + dropOffset, objXZ.y)
               + scaled.x * right
               + scaled.y * N
               + scaled.z * fwd;
 
-    // 法線も同様に変換する
+    // Transform the normal in the same way
     float3 wn = normalize(v.normal.x * right + v.normal.y * N + v.normal.z * fwd);
 
     VSOut o;
@@ -80,10 +80,10 @@ float4 FloatObjPS(VSOut i) : SV_Target
     float3 V = normalize(cameraPos - i.wPos);
     float3 H = normalize(L + V);
 
-    // 面の向きで木材のトーンを変化させる
+    // Vary wood tone based on face orientation
     float upness = saturate(dot(N, float3(0, 1, 0)));
-    float3 topColor  = float3(0.70, 0.57, 0.36); // 板の上面（明るい木）
-    float3 sideColor = float3(0.52, 0.38, 0.22); // 板の側面（暗い木）
+    float3 topColor  = float3(0.70, 0.57, 0.36); // top face of plank (bright wood)
+    float3 sideColor = float3(0.52, 0.38, 0.22); // side face of plank (dark wood)
     float3 base = lerp(sideColor, topColor, upness * upness);
 
     float diff    = saturate(dot(N, L));

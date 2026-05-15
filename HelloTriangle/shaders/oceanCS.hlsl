@@ -1,18 +1,18 @@
 ﻿//oceanCS.hlsl
 
-// 声明UAV：可读写的Texture2D，对应u0寄存器
+// Declare UAV: read-write Texture2D bound to register u0
 RWTexture2D<float4> g_heightMap : register(u0);
 
-// 每个线程组8×8×1个线程
-// 和Dispatch(32,32,1)配合，总共256×256个线程，每个线程处理一个像素
+// 8x8x1 threads per thread group.
+// Combined with Dispatch(32,32,1): 256x256 total threads, each handling one pixel.
 [numthreads(8, 8, 1)]
 
-void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID)//全局线程ID，即像素坐标
+void CSMain(uint3 dispatchThreadID : SV_DispatchThreadID) // global thread ID = pixel coordinate
 {
-    
+
     uint2 pixel = dispatchThreadID.xy;
-    
-    // 后续换成真正的IFFT高度计算
+
+    // To be replaced with the actual IFFT height computation
     g_heightMap[pixel] = float4(0.0f, 0.3f, 0.8f, 1.0f);
-    
+
 }

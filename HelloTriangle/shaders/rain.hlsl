@@ -1,6 +1,6 @@
 // ============================================================
 // rain.hlsl
-// 雨粒子ビルボードの頂点・ピクセルシェーダー。
+// Rain particle billboard vertex and pixel shaders.
 // ============================================================
 cbuffer RainCB : register(b0)
 {
@@ -17,22 +17,25 @@ struct VSInput
 
 struct VSOutput
 {
-    float4 posH : SV_POSITION;
-    float alpha : TEXCOORD0;
+    float4 posH   : SV_POSITION;
+    float  alpha  : TEXCOORD0;
+    float  worldY : TEXCOORD1;
 };
 
 VSOutput VSMain(VSInput vin)
 {
     VSOutput vout;
-    vout.posH = mul(float4(vin.position, 1.0f), viewProj);
-    vout.alpha = vin.alpha;
+    vout.posH   = mul(float4(vin.position, 1.0f), viewProj);
+    vout.alpha  = vin.alpha;
+    vout.worldY = vin.position.y;
     return vout;
 }
 
 float4 PSMain(VSOutput pin) : SV_TARGET
 {
-    // 雨線の色：わずかに青みがかった白、半透明
+    // Discard raindrops below the water surface (y=0)
+    clip(pin.worldY);
+
     float3 rainColor = float3(0.7f, 0.8f, 1.0f);
     return float4(rainColor, pin.alpha);
-
 }

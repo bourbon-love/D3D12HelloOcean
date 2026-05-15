@@ -1,11 +1,11 @@
 // ============================================================
 // TimeEvolutionCS.hlsl
-// 海洋スペクトルの時間発展コンピュートシェーダー。
-// 分散関係 ω(k)=√(g|k|) を用いて毎フレーム周波数域を更新する。
+// Ocean spectrum time evolution compute shader.
+// Updates the frequency domain every frame using the dispersion relation ω(k)=√(g|k|).
 // ============================================================
-// 周波数領域データの時間発展
-// 毎フレームh0(k)からh(k,t)を更新する
-Texture2D<float4> g_h0 : register(t0); // Phillips初期化結果（読み取り専用）
+// Time evolution of frequency-domain data
+// Updates h(k,t) from h0(k) every frame
+Texture2D<float4> g_h0 : register(t0); // Phillips initialization result (read-only)
 RWTexture2D<float4> g_hkt : register(u0); // .xy = h(k,t), .zw = Dx(k,t)
 RWTexture2D<float4> g_dztMap : register(u1); // .xy = Dz(k,t)
 
@@ -20,7 +20,7 @@ cbuffer TimeCB : register(b0)
 static const float PI = 3.14159265f;
 static const float g = 9.81f;
 
-// 複素数乗算
+// Complex multiplication
 float2 complexMul(float2 a, float2 b)
 {
     return float2(a.x * b.x - a.y * b.y,
@@ -51,7 +51,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
                  complexMul(float2(h0c.x, -h0c.y), expNeg);
 
     // Dx(k,t) = -i * (kx/|k|) * h(k,t)
-    // -iの乗算：(a+bi)*(-i) = (b, -a)
+    // Multiply by -i: (a+bi)*(-i) = (b, -a)
     float2 dxFreq = float2(0.0f, 0.0f);
     float2 dzFreq = float2(0.0f, 0.0f);
 
@@ -59,7 +59,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     {
 
         float2 iHkt = float2(hkt.y, -hkt.x); // -i * hkt
-        // k.x/kLenとk.y/kLenは単位方向ベクトル。-i*hktを乗算してDxとDzの周波数成分を得る
+        // k.x/kLen and k.y/kLen are unit direction vectors. Multiply by -i*hkt to get the frequency components of Dx and Dz.
         dxFreq = (k.x / kLen) * iHkt; // dx = -i * (kx/|k|) * h(k,t)
         dzFreq = (k.y / kLen) * iHkt; // dz = -i * (ky/|k|) * h(k,t)
     }

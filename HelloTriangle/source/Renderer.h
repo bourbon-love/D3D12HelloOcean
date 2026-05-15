@@ -1,7 +1,7 @@
 ﻿// ============================================================
 // Renderer.h
-// 海洋メッシュ描画クラス。512×512グリッド、FFT高さマップサンプリング、
-// Gerstnerウェーブ、シーン定数バッファ、カメラ制御を管理する。
+// Ocean mesh rendering class. Manages 512x512 grid, FFT height map sampling,
+// Gerstner waves, scene constant buffer, and camera control.
 // ============================================================
 #pragma once
 #include <d3d12.h>
@@ -14,8 +14,8 @@
 using Microsoft::WRL::ComPtr;
 
 
-static const UINT  GRID_SIZE = 512;   // 分段数
-static const float GRID_WORLD_SIZE = 400.0f; // 世界空间尺寸
+static const UINT  GRID_SIZE = 512;   // Subdivision count
+static const float GRID_WORLD_SIZE = 400.0f; // World-space size
 
 class Renderer
 {
@@ -54,7 +54,7 @@ public:
 	Camera& GetCamera() { return m_camera; }
     void ToggleShowcase() { m_showcaseMode = !m_showcaseMode; }
     bool IsShowcaseMode() const { return m_showcaseMode; }
-	// 供SkyDome读取太阳和天空参数
+	// For SkyDome to read sun and sky parameters
     void SetSkyDome(SkyDome* skyDome) { m_skyDome = skyDome; }
     void SetWeatherSystem(WeatherSystem* ws) { m_weatherSystem = ws; }
     void SetSSRMix(float v) { m_ssrMix = v; }
@@ -70,36 +70,43 @@ public:
 
     struct WaveParam
     {
-        XMFLOAT2 direction; 
-		float amplitude;            // 波浪振幅
-		float waveLength;           // 波浪波长
-		float speed;                // 波浪速度 
-		float steepness;            // 波浪陡峭度(0-1之间，值越大波浪越陡峭)
-		float pad0, pad1;           // 填充以满足16字节对齐
+        XMFLOAT2 direction;
+		float amplitude;            // Wave amplitude
+		float waveLength;           // Wave wavelength
+		float speed;                // Wave speed
+		float steepness;            // Wave steepness (0-1, higher = steeper)
+		float pad0, pad1;           // Padding for 16-byte alignment
   
     };
 
     struct SceneCB
     {
-
         XMMATRIX view;
         XMMATRIX proj;
-        float    time;              //累计时间，驱动波浪动画
-		XMFLOAT3 cameraPos;          //摄像机位置，用于计算视角依赖的波浪效果
+        float    time;
+        XMFLOAT3 cameraPos;
 
         XMFLOAT3 sunDir;
-        float             sunIntensity;
+        float    sunIntensity;
         XMFLOAT3 sunColor;
-        float             padSun;
+        float    padSun;
         XMFLOAT3 skyColor;
-        float             padSky;
+        float    padSky;
         float fogStart;
         float fogEnd;
         float foamIntensity;
         float ssrMix;
         WaveParam waves[4];
 
+        XMFLOAT2 tileOffset;  // Tile XZ offset (world space)
+        XMFLOAT2 tilePad;
     };
+
+    // Constant buffer slots: 256-byte alignment required
+    static const UINT  CB_SLOT_SIZE = 512;          // >= sizeof(SceneCB) and a multiple of 256
+    static const UINT  CB_MAX_TILES = 100;          // Maximum number of tiles drawn
+    static const int   TILE_RADIUS  = 4;            // ±4 tiles around camera (9x9 = 81 tiles max)
+    static constexpr float TILE_SIZE = GRID_WORLD_SIZE;  // Tile world-space size (= 400m)
 
 
 private:
@@ -110,22 +117,36 @@ private:
     void CreateWireframePSO();
 
     Camera m_camera;
-	SkyDome* m_skyDome = nullptr;
+    SkyDome* m_skyDome = nullptr;
     WeatherSystem* m_weatherSystem = nullptr;
     SceneCB* m_mappedCB = nullptr;
     UINT8* m_pCbvDataBegin;
     bool  m_wireframe = false;
     bool  m_showcaseMode = false;
     float m_ssrMix = 1.0f;
+    float m_time = 0.0f;
 
-	float m_time = 0.0f;
+    SceneCB m_lastSceneCB = {};  // Used as base for tile CBs in Render()
+
+    // LOD grid (64x64): for distant tiles
+    ComPtr<ID3D12Resource>   m_lodVB, m_lodVBUpload;
+    ComPtr<ID3D12Resource>   m_lodIB, m_lodIBUpload;
+    D3D12_VERTEX_BUFFER_VIEW m_lodVBView = {};
+    D3D12_INDEX_BUFFER_VIEW  m_lodIBView = {};
+    UINT                     m_lodIndexCount = 0;
+
+    // Frustum planes (for view frustum culling)
+    XMFLOAT4 m_frustumPlanes[6] = {};
+    void ExtractFrustumPlanes();
+    bool IsTileVisible(int tx, int tz) const;
+    void CreateLodGridBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList);
 
     ComPtr<ID3D12Device> m_device;
     ComPtr<ID3D12GraphicsCommandList> m_commandList;
     ComPtr<ID3D12RootSignature> m_rootSignature;
     ComPtr<ID3D12Resource> m_constantBuffer;
-    ComPtr<ID3D12PipelineState>       m_pipelineState;       // 实体PSO
-    ComPtr<ID3D12PipelineState>       m_wireframePSO;        // 线框PSO
+    ComPtr<ID3D12PipelineState>       m_pipelineState;       // Solid PSO
+    ComPtr<ID3D12PipelineState>       m_wireframePSO;        // Wireframe PSO
     //depth
     ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
     ComPtr<ID3D12Resource>       m_depthBuffer;
@@ -146,7 +167,7 @@ private:
     std::vector<UINT8> m_waterBoxVSData;
     std::vector<UINT8> m_waterBoxPSData;
 
-    // 水箱
+    // Water box
     ComPtr<ID3D12Resource> m_boxVB;
     ComPtr<ID3D12Resource> m_boxVBUpload;
     ComPtr<ID3D12Resource> m_boxIB;
@@ -155,6 +176,6 @@ private:
     D3D12_INDEX_BUFFER_VIEW  m_boxIBView = {};
     UINT                     m_boxIndexCount = 0;
 
-    // 半透明 PSO
+    // Translucent PSO
     ComPtr<ID3D12PipelineState> m_waterBoxPSO;
 };
