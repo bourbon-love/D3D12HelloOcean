@@ -241,6 +241,7 @@ void Renderer::Update(float deltaTime)
     }
     else
     {
+
         // Default values when the sky system is absent
         cb.sunDir = { 0.5f, 1.0f, 0.3f };
         cb.sunIntensity = 1.0f;
@@ -251,6 +252,15 @@ void Renderer::Update(float deltaTime)
         
     }
     //               direction         amplitude  wavelength  speed  steepness
+    cb.cloudCoverage    = m_cloudCoverage;
+    cb.cloudScale       = m_cloudScale;
+    cb.cloudBase        = m_cloudBase;
+    cb.cloudTop         = m_cloudTop;
+    cb.cloudWindX       = m_cloudWindX;
+    cb.cloudWindZ       = m_cloudWindZ;
+    cb.cloudDensityMult = m_cloudDensityMult;
+    cb.cloudEnabled     = m_cloudEnabled;
+
     cb.waves[0] = { {1.0f,  0.0f},  0.3f,  60.0f, 1.0f, 0.06f };
     cb.waves[1] = { {0.7f,  0.7f},  0.15f, 35.0f, 1.3f, 0.05f };
     cb.waves[2] = { {0.2f, -0.9f},  0.08f, 20.0f, 1.6f, 0.04f };

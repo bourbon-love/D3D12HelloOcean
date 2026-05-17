@@ -295,9 +295,19 @@ void D3D12HelloTriangle::OnUpdate()
     m_renderer->Update(scaledDt);
     m_weatherSystem->Update(scaledDt);
     m_rainSystem->Update(scaledDt, weatherIntensity,
-        m_oceanFFT->windDirX, m_oceanFFT->windDirY);
+        m_oceanFFT->windDirX, m_oceanFFT->windDirY,
+        m_renderer->GetCameraPos());
 
     m_renderer->SetSSRMix(m_pp->ssrStrength);
+    m_renderer->SetCloudShadowParams(
+        m_volumetricClouds->cloudCoverage,
+        m_volumetricClouds->cloudScale,
+        m_volumetricClouds->cloudBase,
+        m_volumetricClouds->cloudTop,
+        m_volumetricClouds->densityMult,
+        m_oceanFFT->windDirX,
+        m_oceanFFT->windDirY,
+        m_volumetricClouds->enabled ? 1.0f : 0.0f);
     m_skyDome->SetWindDir(m_oceanFFT->windDirX, m_oceanFFT->windDirY);
     m_floatingObject->Update(scaledDt);
     m_fishSchool->Update(scaledDt, m_renderer->GetTime());
@@ -342,30 +352,178 @@ void D3D12HelloTriangle::OnUpdate()
 // ============================================================
 void D3D12HelloTriangle::BuildImGuiUI()
 {
-    ImGui::Begin("Scene Controls");
+    ImGuiIO& io = ImGui::GetIO();
+    const float W          = io.DisplaySize.x;
+    const float H          = io.DisplaySize.y;
+    const float kLeftW     = 265.0f;
+    const float kRightW    = 275.0f;
+    const float kBottomH   = 62.0f;
+    const float kPanelH    = H - kBottomH;
+    const ImGuiWindowFlags kPanelFlags =
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse;
 
-    ImGui::Text("FPS: %.1f  (%.2f ms)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
+    // ============================================================
+    // LEFT PANEL — scene / sky / cloud parameters
+    // ============================================================
+    ImGui::SetNextWindowPos (ImVec2(0, 0),      ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(kLeftW, kPanelH), ImGuiCond_Always);
+    ImGui::Begin("Scene", nullptr, kPanelFlags);
 
-    ImGui::Separator(); ImGui::Text("--- Time ---");
-    ImGui::SliderFloat("Time Scale", &m_timeScale, 0.0f, 10.0f, "%.2f x");
-    ImGui::SameLine();
-    if (ImGui::Button(m_timePaused ? "Resume" : "Pause"))
-        m_timePaused = !m_timePaused;
+    ImGui::Text("FPS: %.1f  (%.2f ms)", io.Framerate, 1000.0f / io.Framerate);
 
-    ImGui::Separator(); ImGui::Text("--- Weather ---");
-    ImGui::SameLine();
-    bool showcase = m_renderer->IsShowcaseMode();
-    if (ImGui::Button(showcase ? "Showcase: ON" : "Showcase: OFF"))
+    // --- Time ---
+    ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "Time");
+    ImGui::SliderFloat("Scale##time", &m_timeScale, 0.0f, 10.0f, "%.2f x");
+
+    // --- Moon ---
+    ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "Moon");
+    float rotSpeed = m_skyDome->GetCrescentRotSpeed();
+    if (ImGui::SliderFloat("Crescent Spd", &rotSpeed, 0.0f, 0.5f, "%.3f"))
+        m_skyDome->SetCrescentRotSpeed(rotSpeed);
+    float bodyPow = m_skyDome->GetMoonBodyPow();
+    if (ImGui::SliderFloat("Moon Size",    &bodyPow,   300.0f,  2000.0f, "%.0f"))
+        m_skyDome->SetMoonBodyPow(bodyPow);
+    float occludePow = m_skyDome->GetMoonOccludePow();
+    if (ImGui::SliderFloat("Occlude Size", &occludePow, 400.0f, 3000.0f, "%.0f"))
+        m_skyDome->SetMoonOccludePow(occludePow);
+    float offsetAmt = m_skyDome->GetCrescentOffsetAmt();
+    if (ImGui::SliderFloat("Crescent Ofs", &offsetAmt, 0.002f, 0.03f, "%.4f"))
+        m_skyDome->SetCrescentOffsetAmt(offsetAmt);
+
+    // --- Volumetric Clouds ---
+    ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "Clouds");
+    ImGui::Checkbox("Enable Clouds", &m_volumetricClouds->enabled);
+    if (m_volumetricClouds->enabled)
     {
-        if (showcase) { m_renderer->ToggleShowcase(); m_renderer->GetCamera().ExitShowcase(); }
-        else          { m_renderer->ToggleShowcase(); m_renderer->GetCamera().EnterShowcase(); }
+        ImGui::SliderFloat("Coverage", &m_volumetricClouds->cloudCoverage, 0.0f,    1.0f,    "%.2f");
+        ImGui::SliderFloat("Density",  &m_volumetricClouds->densityMult,   0.1f,    3.0f,    "%.2f");
+        ImGui::SliderFloat("Scale",    &m_volumetricClouds->cloudScale,    0.3f,    3.0f,    "%.2f");
+        ImGui::SliderFloat("Base (m)", &m_volumetricClouds->cloudBase,     200.0f,  2000.0f, "%.0f");
+        ImGui::SliderFloat("Top (m)",  &m_volumetricClouds->cloudTop,      500.0f,  5000.0f, "%.0f");
     }
-    if (showcase)
+
+    // --- Water ---
+    ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "Water");
+    ImGui::SliderFloat("Body Str",    &m_pp->waterBodyStr,  0.0f, 3.0f,  "%.2f");
+    ImGui::SliderFloat("Refraction",  &m_pp->waterRefract,  0.0f, 0.08f, "%.3f");
+    ImGui::SliderFloat("Min Transmit",&m_pp->waterMinTrans, 0.0f, 0.6f,  "%.2f");
+
+    // --- Camera / Showcase ---
+    ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "Camera");
+    ImGui::SliderFloat("Vignette",   &m_pp->vignetteStrength, 0.0f, 1.5f,  "%.2f");
+    ImGui::SliderFloat("Film Grain", &m_pp->grainStrength,    0.0f, 0.08f, "%.3f");
+    if (m_renderer->IsShowcaseMode())
     {
         float& h = m_renderer->GetCamera().m_showcaseHeight;
         ImGui::SliderFloat("Cam Height", &h, -15.0f, 40.0f, "%.1f m");
     }
 
+    ImGui::End();
+
+    // ============================================================
+    // RIGHT PANEL — post-process parameters
+    // ============================================================
+    ImGui::SetNextWindowPos (ImVec2(W - kRightW, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(kRightW, kPanelH), ImGuiCond_Always);
+    ImGui::Begin("Post Process", nullptr, kPanelFlags);
+
+    // --- Exposure / Bloom ---
+    ImGui::TextColored({1.0f,0.8f,0.4f,1.0f}, "Bloom");
+    ImGui::Checkbox("Auto Exposure", &m_autoExposure);
+    if (m_autoExposure) { ImGui::SameLine(); ImGui::Text("EV: %.2f", m_pp->exposure); }
+    else                  ImGui::SliderFloat("Exposure",  &m_pp->exposure,       0.1f, 5.0f,  "%.2f");
+    ImGui::Checkbox("Enable Bloom", &m_pp->bloomEnabled);
+    if (m_pp->bloomEnabled)
+    {
+        ImGui::SliderFloat("Threshold", &m_pp->bloomThreshold, 0.5f, 5.0f, "%.2f");
+        ImGui::SliderFloat("Strength",  &m_pp->bloomStrength,  0.1f, 3.0f, "%.2f");
+    }
+
+    // --- God Rays ---
+    ImGui::Separator(); ImGui::TextColored({1.0f,0.8f,0.4f,1.0f}, "God Rays");
+    ImGui::Checkbox("Enable##GR", &m_pp->godRaysEnabled);
+    if (m_pp->godRaysEnabled)
+        ImGui::SliderFloat("GR Strength", &m_pp->godRayStrength, 0.1f, 3.0f, "%.2f");
+
+    // --- Lens Flare ---
+    ImGui::Separator(); ImGui::TextColored({1.0f,0.8f,0.4f,1.0f}, "Lens Flare");
+    ImGui::Checkbox("Enable##LF", &m_pp->lensFlareEnabled);
+    if (m_pp->lensFlareEnabled)
+        ImGui::SliderFloat("LF Strength", &m_pp->lensFlareStrength, 0.1f, 3.0f, "%.2f");
+
+    // --- Depth of Field ---
+    ImGui::Separator(); ImGui::TextColored({1.0f,0.8f,0.4f,1.0f}, "Depth of Field");
+    ImGui::Checkbox("Enable DOF", &m_pp->dofEnabled);
+    if (m_pp->dofEnabled)
+    {
+        ImGui::SliderFloat("Focus Depth", &m_pp->dofFocusDepth, 0.5f,  1.0f,   "%.3f");
+        ImGui::SliderFloat("Focus Range", &m_pp->dofFocusRange, 0.02f, 0.5f,   "%.3f");
+        ImGui::SliderFloat("Max Blur",    &m_pp->dofMaxRadius,  0.002f,0.025f, "%.4f");
+    }
+
+    // --- SSAO ---
+    ImGui::Separator(); ImGui::TextColored({1.0f,0.8f,0.4f,1.0f}, "SSAO");
+    ImGui::Checkbox("Enable SSAO", &m_pp->ssaoEnabled);
+    if (m_pp->ssaoEnabled)
+    {
+        ImGui::SliderFloat("AO Strength", &m_pp->ssaoStrength, 0.0f, 1.5f, "%.2f");
+        ImGui::SliderFloat("AO Radius",   &m_pp->ssaoRadius,   0.1f, 3.0f, "%.2f");
+    }
+
+    // --- SSR ---
+    ImGui::Separator(); ImGui::TextColored({1.0f,0.8f,0.4f,1.0f}, "SSR");
+    ImGui::SliderFloat("SSR Strength", &m_pp->ssrStrength, 0.0f, 1.0f, "%.2f");
+
+    // --- TAA ---
+    ImGui::Separator(); ImGui::TextColored({1.0f,0.8f,0.4f,1.0f}, "TAA");
+    ImGui::Checkbox("Enable TAA", &m_pp->taaEnabled);
+    if (!m_pp->taaEnabled) { m_currentJitter = { 0.0f, 0.0f }; m_renderer->SetJitter(0.0f, 0.0f); }
+    if (m_pp->taaEnabled)
+        ImGui::SliderFloat("History Blend", &m_pp->taaBlend, 0.5f, 0.98f, "%.2f");
+
+    ImGui::End();
+
+    // ============================================================
+    // BOTTOM BAR — buttons only
+    // ============================================================
+    ImGui::SetNextWindowPos (ImVec2(0, H - kBottomH), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(W, kBottomH),     ImGuiCond_Always);
+    ImGui::Begin("##BottomBar", nullptr,
+        kPanelFlags | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoScrollbar);
+
+    // 5 groups, evenly spaced across the full bar width
+    const float kBarInner  = W - 20.0f;
+    const float kGroupW    = kBarInner / 5.0f;
+    const float kBarStartX = 10.0f;
+    const float kBarY      = ImGui::GetCursorPosY();  // lock Y so all groups sit on the same line
+
+    auto NextGroup = [&](int idx)
+    {
+        ImGui::SetCursorPos(ImVec2(kBarStartX + idx * kGroupW, kBarY));
+    };
+
+    // Group 0 — Time
+    NextGroup(0);
+    ImGui::TextDisabled("Time"); ImGui::SameLine();
+    if (ImGui::Button(m_timePaused ? "Resume" : " Pause "))
+        m_timePaused = !m_timePaused;
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80.0f);
+    ImGui::SliderFloat("##ts", &m_timeScale, 0.0f, 10.0f, "%.1fx");
+
+    // Group 1 — Showcase
+    NextGroup(1);
+    bool showcase = m_renderer->IsShowcaseMode();
+    ImGui::TextDisabled("View"); ImGui::SameLine();
+    if (ImGui::Button(showcase ? "Showcase ON " : "Showcase OFF"))
+    {
+        if (showcase) { m_renderer->ToggleShowcase(); m_renderer->GetCamera().ExitShowcase(); }
+        else          { m_renderer->ToggleShowcase(); m_renderer->GetCamera().EnterShowcase(); }
+    }
+
+    // Group 2 — Weather
+    NextGroup(2);
+    ImGui::TextDisabled("Weather"); ImGui::SameLine();
     bool isAuto = m_weatherSystem->IsAutoWeather();
     WeatherState cur = m_weatherSystem->GetCurrentState();
     int weatherIdx = isAuto ? 0 : (cur == WeatherState::Calm ? 1 : cur == WeatherState::Windy ? 2 : 3);
@@ -375,123 +533,44 @@ void D3D12HelloTriangle::BuildImGuiUI()
         if (i > 0) ImGui::SameLine();
         if (ImGui::RadioButton(weatherLabels[i], weatherIdx == i))
         {
-            if (i == 0) { m_weatherSystem->SetAutoWeather(true); }
+            if (i == 0) m_weatherSystem->SetAutoWeather(true);
             else
             {
                 m_weatherSystem->SetAutoWeather(false);
-                WeatherState states[] = { WeatherState::Calm, WeatherState::Calm, WeatherState::Windy, WeatherState::Storm };
+                WeatherState states[] = { WeatherState::Calm, WeatherState::Calm,
+                                          WeatherState::Windy, WeatherState::Storm };
                 m_weatherSystem->SetWeather(states[i], 3.0f);
             }
         }
     }
 
-    ImGui::Separator(); ImGui::Text("--- Moon ---");
-    float rotSpeed = m_skyDome->GetCrescentRotSpeed();
-    if (ImGui::SliderFloat("Crescent Rot Speed", &rotSpeed, 0.0f, 0.5f, "%.3f"))
-        m_skyDome->SetCrescentRotSpeed(rotSpeed);
-    float bodyPow = m_skyDome->GetMoonBodyPow();
-    if (ImGui::SliderFloat("Moon Size (exp)", &bodyPow, 300.0f, 2000.0f, "%.0f"))
-        m_skyDome->SetMoonBodyPow(bodyPow);
-    float occludePow = m_skyDome->GetMoonOccludePow();
-    if (ImGui::SliderFloat("Occlude Size (exp)", &occludePow, 400.0f, 3000.0f, "%.0f"))
-        m_skyDome->SetMoonOccludePow(occludePow);
-    float offsetAmt = m_skyDome->GetCrescentOffsetAmt();
-    if (ImGui::SliderFloat("Crescent Offset", &offsetAmt, 0.002f, 0.03f, "%.4f"))
-        m_skyDome->SetCrescentOffsetAmt(offsetAmt);
-
-    ImGui::Separator(); ImGui::Text("--- Bloom ---");
-    ImGui::Checkbox("Auto Exposure", &m_autoExposure);
-    ImGui::SameLine();
-    if (m_autoExposure) ImGui::Text("EV: %.2f", m_pp->exposure);
-    else                ImGui::SliderFloat("Exposure", &m_pp->exposure, 0.1f, 5.0f, "%.2f");
-    ImGui::Checkbox("Enable Bloom", &m_pp->bloomEnabled);
-    if (m_pp->bloomEnabled)
+    // Group 3 — Floating Boxes
+    NextGroup(3);
     {
-        ImGui::SliderFloat("Threshold", &m_pp->bloomThreshold, 0.5f, 5.0f, "%.2f");
-        ImGui::SliderFloat("Strength",  &m_pp->bloomStrength,  0.1f, 3.0f, "%.2f");
-    }
-    ImGui::Checkbox("God Rays", &m_pp->godRaysEnabled);
-    if (m_pp->godRaysEnabled)
-        ImGui::SliderFloat("GR Strength", &m_pp->godRayStrength, 0.1f, 3.0f, "%.2f");
-
-    ImGui::Separator(); ImGui::Text("--- Depth of Field ---");
-    ImGui::Checkbox("Enable DOF", &m_pp->dofEnabled);
-    if (m_pp->dofEnabled)
-    {
-        ImGui::SliderFloat("Focus Depth",  &m_pp->dofFocusDepth, 0.5f, 1.0f,  "%.3f");
-        ImGui::SliderFloat("Focus Range",  &m_pp->dofFocusRange, 0.02f, 0.5f, "%.3f");
-        ImGui::SliderFloat("Max Blur",     &m_pp->dofMaxRadius,  0.002f, 0.025f, "%.4f");
+        int cnt   = (int)m_floatingObject->GetBoxCount();
+        int uwCnt = m_floatingObject->GetUnderwaterBoxCount();
+        ImGui::TextDisabled("Boxes"); ImGui::SameLine();
+        ImGui::Text("%d/%d", cnt, FloatingObject::MAX_BOXES); ImGui::SameLine();
+        if (ImGui::Button("Spawn##box") && cnt < FloatingObject::MAX_BOXES) m_floatingObject->SpawnBox();
+        ImGui::SameLine();
+        if (ImGui::Button("Clear##box")) m_floatingObject->ClearBoxes();
+        ImGui::SameLine();
+        ImGui::Text("UW %d/%d", uwCnt, FloatingObject::MAX_UW_BOXES); ImGui::SameLine();
+        if (ImGui::Button("Spawn##uw") && uwCnt < FloatingObject::MAX_UW_BOXES) m_floatingObject->SpawnUnderwaterBox();
+        ImGui::SameLine();
+        if (ImGui::Button("Clear##uw")) m_floatingObject->ClearUnderwaterBoxes();
     }
 
-    ImGui::Separator(); ImGui::Text("--- Camera ---");
-    ImGui::SliderFloat("Vignette",   &m_pp->vignetteStrength, 0.0f, 1.5f, "%.2f");
-    ImGui::SliderFloat("Film Grain", &m_pp->grainStrength,    0.0f, 0.08f, "%.3f");
-
-    ImGui::Separator(); ImGui::Text("--- SSAO ---");
-    ImGui::Checkbox("Enable SSAO", &m_pp->ssaoEnabled);
-    if (m_pp->ssaoEnabled)
-    {
-        ImGui::SliderFloat("AO Strength", &m_pp->ssaoStrength, 0.0f, 1.5f, "%.2f");
-        ImGui::SliderFloat("AO Radius",   &m_pp->ssaoRadius,   0.1f, 3.0f, "%.2f");
-    }
-
-    ImGui::Separator(); ImGui::Text("--- SSR ---");
-    ImGui::SliderFloat("SSR Strength", &m_pp->ssrStrength, 0.0f, 1.0f, "%.2f");
-
-    ImGui::Separator(); ImGui::Text("--- Water ---");
-    ImGui::SliderFloat("Body Strength", &m_pp->waterBodyStr,  0.0f, 3.0f,  "%.2f");
-    ImGui::SliderFloat("Refraction",    &m_pp->waterRefract,  0.0f, 0.08f, "%.3f");
-    ImGui::SliderFloat("Min Transmit",  &m_pp->waterMinTrans, 0.0f, 0.6f,  "%.2f");
-
-    ImGui::Separator(); ImGui::Text("--- TAA ---");
-    ImGui::Checkbox("Enable TAA", &m_pp->taaEnabled);
-    if (!m_pp->taaEnabled) { m_currentJitter = { 0.0f, 0.0f }; m_renderer->SetJitter(0.0f, 0.0f); }
-    if (m_pp->taaEnabled)
-        ImGui::SliderFloat("History Blend", &m_pp->taaBlend, 0.5f, 0.98f, "%.2f");
-
-    ImGui::Separator(); ImGui::Text("--- Floating Boxes ---");
-    {
-        int count = (int)m_floatingObject->GetBoxCount();
-        ImGui::Text("Surface: %d / %d", count, FloatingObject::MAX_BOXES);
-        ImGui::SameLine();
-        if (ImGui::Button("Spawn Box") && count < FloatingObject::MAX_BOXES) m_floatingObject->SpawnBox();
-        ImGui::SameLine();
-        if (ImGui::Button("Clear")) m_floatingObject->ClearBoxes();
-
-        int uwCount = m_floatingObject->GetUnderwaterBoxCount();
-        ImGui::Text("Underwater: %d / %d", uwCount, FloatingObject::MAX_UW_BOXES);
-        ImGui::SameLine();
-        if (ImGui::Button("Spawn UW Box") && uwCount < FloatingObject::MAX_UW_BOXES)
-            m_floatingObject->SpawnUnderwaterBox();
-        ImGui::SameLine();
-        if (ImGui::Button("Clear UW")) m_floatingObject->ClearUnderwaterBoxes();
-    }
-
-    ImGui::Separator(); ImGui::Text("--- Fish School ---");
+    // Group 4 — Fish
+    NextGroup(4);
     {
         int cnt = m_fishSchool->GetFishCount();
-        ImGui::Text("Fish: %d / %d", cnt, FishSchool::MAX_FISH);
-        ImGui::SameLine();
+        ImGui::TextDisabled("Fish"); ImGui::SameLine();
+        ImGui::Text("%d/%d", cnt, FishSchool::MAX_FISH); ImGui::SameLine();
         if (ImGui::Button("Spawn School") && cnt == 0) m_fishSchool->SpawnSchool();
         ImGui::SameLine();
         if (ImGui::Button("Clear Fish")) m_fishSchool->ClearFish();
     }
-
-    ImGui::Separator(); ImGui::Text("--- Volumetric Clouds ---");
-    ImGui::Checkbox("Enable Clouds", &m_volumetricClouds->enabled);
-    if (m_volumetricClouds->enabled)
-    {
-        ImGui::SliderFloat("Coverage",    &m_volumetricClouds->cloudCoverage, 0.0f, 1.0f, "%.2f");
-        ImGui::SliderFloat("Density",     &m_volumetricClouds->densityMult,   0.1f, 3.0f, "%.2f");
-        ImGui::SliderFloat("Scale",       &m_volumetricClouds->cloudScale,    0.3f, 3.0f, "%.2f");
-        ImGui::SliderFloat("Base (m)",    &m_volumetricClouds->cloudBase,     200.0f, 2000.0f, "%.0f");
-        ImGui::SliderFloat("Top (m)",     &m_volumetricClouds->cloudTop,      500.0f, 5000.0f, "%.0f");
-    }
-
-    ImGui::Separator(); ImGui::Text("--- Lens Flare ---");
-    ImGui::Checkbox("Enable Lens Flare", &m_pp->lensFlareEnabled);
-    if (m_pp->lensFlareEnabled)
-        ImGui::SliderFloat("LF Strength", &m_pp->lensFlareStrength, 0.1f, 3.0f, "%.2f");
 
     ImGui::End();
 }

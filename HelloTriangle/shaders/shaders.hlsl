@@ -38,7 +38,69 @@ cbuffer SceneCB : register(b0)
 
     float2 tileOffset;  // tile XZ offset (world space)
     float2 tilePad;
+
+    // Cloud shadow
+    float cloudCoverage;
+    float cloudScale;
+    float cloudBase;
+    float cloudTop;
+    float cloudWindX;
+    float cloudWindZ;
+    float cloudDensityMult;
+    float cloudEnabled;
 };
+
+// ---- Cloud shadow: 6-step ray march toward sun through cloud slab ----
+float cs_hash(float3 p)
+{
+    p = frac(p * float3(443.897, 441.423, 437.195));
+    p += dot(p, p.yxz + 19.19);
+    return frac((p.x + p.y) * p.z);
+}
+float cs_vnoise(float3 p)
+{
+    float3 i = floor(p), f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return lerp(
+        lerp(lerp(cs_hash(i),               cs_hash(i+float3(1,0,0)), f.x),
+             lerp(cs_hash(i+float3(0,1,0)), cs_hash(i+float3(1,1,0)), f.x), f.y),
+        lerp(lerp(cs_hash(i+float3(0,0,1)), cs_hash(i+float3(1,0,1)), f.x),
+             lerp(cs_hash(i+float3(0,1,1)), cs_hash(i+float3(1,1,1)), f.x), f.y),
+        f.z);
+}
+float cs_fbm3(float3 p)
+{
+    return cs_vnoise(p) * 0.500
+         + cs_vnoise(p * 2.031) * 0.250
+         + cs_vnoise(p * 4.073) * 0.125;
+}
+float CloudShadow(float3 worldPos)
+{
+    if (cloudEnabled < 0.5 || sunDir.y <= 0.02) return 1.0;
+    float3 sd     = normalize(sunDir);
+    float  tStart = (cloudBase - worldPos.y) / max(sd.y, 0.02);
+    float  tEnd   = (cloudTop  - worldPos.y) / max(sd.y, 0.02);
+    if (tEnd <= tStart) return 1.0;
+
+    const int STEPS = 6;
+    float stepSize = (tEnd - tStart) / float(STEPS);
+    float sigma    = 0.0;
+    float3 drift   = float3(cloudWindX, 0.0, cloudWindZ) * time * 30.0;
+
+    [unroll]
+    for (int i = 0; i < STEPS; i++)
+    {
+        float  t       = tStart + (i + 0.5) * stepSize;
+        float3 p       = worldPos + sd * t;
+        float3 q       = (p + drift) * cloudScale * 0.00030;
+        float  base    = cs_fbm3(q);
+        float  thresh  = 0.56 - cloudCoverage * 0.44;
+        float  density = smoothstep(0.0, 0.35, base - thresh) * cloudDensityMult;
+        sigma += density * stepSize * 0.052;
+    }
+    // Amplify slightly so thin cloud still casts a perceptible shadow
+    return exp(-sigma * 2.0);
+}
 
 struct RippleData
 {
@@ -310,7 +372,9 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     float nightT = saturate(1.0 - sunIntensity * 3.0);   // 0=day, 1=deep night
     float3 nightAmbient = float3(0.022, 0.024, 0.028);   // near-black with very slight blue tint
     float3 ambLight = lerp(sunColor, nightAmbient, nightT);
-    float3 diffuse = waterColor * (NdotL * 0.5f * sunIntensity + 0.5f);
+    // Cloud shadow: attenuates direct (NdotL) light; ambient (0.5f) stays unaffected
+    float cloudShad = CloudShadow(pin.posW);
+    float3 diffuse = waterColor * (NdotL * 0.5f * sunIntensity * cloudShad + 0.5f);
     diffuse *= ambLight;
 
     // Specular: two-layer structure — tight specular highlight + broad scatter lobe
@@ -319,7 +383,7 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     // Disable the broad scatter lobe at night (moonlight): moon color {0.6,0.7,1.0} causes green cast
     float daySpec   = saturate((sunIntensity - 0.35) * 10.0);
     float specBroad = pow(NdotH,  18.0f) *  0.6f * daySpec;
-    float3 specularColor = sunColor * (specTight + specBroad) * sunIntensity;
+    float3 specularColor = sunColor * (specTight + specBroad) * sunIntensity * cloudShad;
 
     // Fresnel
     float F0 = 0.02f;
@@ -425,7 +489,7 @@ float4 PSMain(VSOutput pin) : SV_TARGET
         float  sssDaylight = saturate((sunIntensity - 0.35) * 10.0);
         // Wave crest transmitted light: real waves are blue-green (keep green subtle)
         float3 sssColor    = float3(0.0, 0.38, 0.42) * sssView * sssCrest
-                             * min(sunIntensity, 1.5) * 1.4 * sssDaylight;
+                             * min(sunIntensity, 1.5) * 1.4 * sssDaylight * cloudShad;
         color += sssColor;
     }
 
