@@ -58,6 +58,18 @@ public:
     void SetSkyDome(SkyDome* skyDome) { m_skyDome = skyDome; }
     void SetWeatherSystem(WeatherSystem* ws) { m_weatherSystem = ws; }
     void SetSSRMix(float v) { m_ssrMix = v; }
+    void SetCloudShadowParams(float coverage, float scale, float base, float top,
+                              float densityMult, float windX, float windZ, float enabled)
+    {
+        m_cloudCoverage    = coverage;
+        m_cloudScale       = scale;
+        m_cloudBase        = base;
+        m_cloudTop         = top;
+        m_cloudDensityMult = densityMult;
+        m_cloudWindX       = windX;
+        m_cloudWindZ       = windZ;
+        m_cloudEnabled     = enabled;
+    }
     void SetJitter(float x, float y) { m_camera.m_jitter = { x, y }; }
     XMMATRIX GetViewMatrix() const
     {
@@ -100,6 +112,16 @@ public:
 
         XMFLOAT2 tileOffset;  // Tile XZ offset (world space)
         XMFLOAT2 tilePad;
+
+        // Cloud shadow: ocean surface occlusion from cloud density above
+        float cloudCoverage;
+        float cloudScale;
+        float cloudBase;
+        float cloudTop;
+        float cloudWindX;
+        float cloudWindZ;
+        float cloudDensityMult;
+        float cloudEnabled;   // 0=off, 1=on
     };
 
     // Constant buffer slots: 256-byte alignment required
@@ -124,7 +146,15 @@ private:
     bool  m_wireframe = false;
     bool  m_showcaseMode = false;
     float m_ssrMix = 1.0f;
-    float m_time = 0.0f;
+    float m_time   = 0.0f;
+    float m_cloudCoverage    = 0.45f;
+    float m_cloudScale       = 1.0f;
+    float m_cloudBase        = 600.0f;
+    float m_cloudTop         = 2200.0f;
+    float m_cloudDensityMult = 1.0f;
+    float m_cloudWindX       = 0.0f;
+    float m_cloudWindZ       = 0.0f;
+    float m_cloudEnabled     = 0.0f;
 
     SceneCB m_lastSceneCB = {};  // Used as base for tile CBs in Render()
 

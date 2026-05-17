@@ -36,6 +36,7 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     // Discard raindrops below the water surface (y=0)
     clip(pin.worldY);
 
-    float3 rainColor = float3(0.7f, 0.8f, 1.0f);
+    // Desaturated grey-blue: real rain streaks are nearly transparent and cool-tinted
+    float3 rainColor = float3(0.55f, 0.60f, 0.72f);
     return float4(rainColor, pin.alpha);
 }

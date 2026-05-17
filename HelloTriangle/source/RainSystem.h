@@ -46,7 +46,8 @@ public:
         const UINT8* vsData, UINT vsSize,
         const UINT8* psData, UINT psSize);
     void InitResources(ComPtr<ID3D12GraphicsCommandList> cmdList);
-    void Update(float deltaTime, float intensity, float windDirX, float windDirY); // intensity: 0=no rain, 1=heavy storm
+    void Update(float deltaTime, float intensity, float windDirX, float windDirY,
+                const XMFLOAT3& cameraPos); // intensity: 0=no rain, 1=heavy storm
     void Render(RenderContext& ctx,
         const XMMATRIX& view, const XMMATRIX& proj,
         const XMFLOAT3& cameraPos);

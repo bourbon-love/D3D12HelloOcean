@@ -115,22 +115,28 @@ void RainSystem::CreatePSO(
 
 void RainSystem::SpawnRainDrop(const XMFLOAT3& cameraPos)
 {
-    std::uniform_real_distribution<float> distXZ(-150.0f, 150.0f);
-    std::uniform_real_distribution<float> distY(30.0f, 80.0f);
-    std::uniform_real_distribution<float> distSpeed(40.0f, 80.0f);
-    std::uniform_real_distribution<float> distLen(1.5f, 3.0f);
+    std::uniform_real_distribution<float> distAngle(0.0f, 6.28318f);
+    std::uniform_real_distribution<float> distR    (0.0f, 1.0f);
+    std::uniform_real_distribution<float> distY    (25.0f, 65.0f);
+    std::uniform_real_distribution<float> distSpeed(45.0f, 90.0f);
+    std::uniform_real_distribution<float> distLen  (1.0f, 2.2f);
+
+    // sqrt(r) gives uniform disk distribution; plain r clusters drops near the centre
+    float angle = distAngle(m_rng);
+    float r     = sqrtf(distR(m_rng)) * 110.0f;
 
     RainDrop drop;
     drop.position = XMFLOAT3(
-        cameraPos.x + distXZ(m_rng),
+        cameraPos.x + r * cosf(angle),
         cameraPos.y + distY(m_rng),
-        cameraPos.z + distXZ(m_rng));
-    drop.speed = distSpeed(m_rng);
+        cameraPos.z + r * sinf(angle));
+    drop.speed  = distSpeed(m_rng);
     drop.length = distLen(m_rng);
     m_drops.push_back(drop);
 }
 
-void RainSystem::Update(float deltaTime, float intensity, float windDirX, float windDirY)
+void RainSystem::Update(float deltaTime, float intensity, float windDirX, float windDirY,
+                        const XMFLOAT3& cameraPos)
 {
     m_intensity = intensity;
     m_windDirX = windDirX;
@@ -192,16 +198,22 @@ void RainSystem::Update(float deltaTime, float intensity, float windDirX, float 
         m_rippleCBMapped->ripples[i].strength = (1.0f - t) * m_intensity; // fades over time
     }
     m_rippleCBMapped->rippleCount = count;
-    // Remove raindrops that have hit the surface
+    // Remove drops that hit the surface or drifted out of the spawn radius
+    const float kRecycleR2 = 115.0f * 115.0f;
     m_drops.erase(
         std::remove_if(m_drops.begin(), m_drops.end(),
-            [](const RainDrop& d) { return d.position.y <= -10.0f; }),
+            [&cameraPos, kRecycleR2](const RainDrop& d)
+            {
+                if (d.position.y <= -2.0f) return true;
+                float dx = d.position.x - cameraPos.x;
+                float dz = d.position.z - cameraPos.z;
+                return (dx * dx + dz * dz) > kRecycleR2;
+            }),
         m_drops.end());
 
-    // Replenish new raindrops
-    XMFLOAT3 camPos = { 0.0f, 0.0f, 0.0f };
+    // Replenish using actual camera position so drops always surround the player
     while (m_drops.size() < targetDrops)
-        SpawnRainDrop(camPos);
+        SpawnRainDrop(cameraPos);
 
     // Write VB
     m_activeDrops = static_cast<UINT>(
@@ -214,7 +226,7 @@ void RainSystem::Update(float deltaTime, float intensity, float windDirX, float 
 
         // Top vertex
         m_rainVBMapped[base].position = drop.position;
-        m_rainVBMapped[base].alpha = intensity * 0.6f;
+        m_rainVBMapped[base].alpha = intensity * 0.35f;
 
         // Wind offset: greater tilt in storms, direction follows windDir
         float windOffsetX = drop.length * m_windDirX * m_intensity * 0.8f;
@@ -233,7 +245,7 @@ void RainSystem::Render(
     const XMMATRIX& view, const XMMATRIX& proj,
     const XMFLOAT3& cameraPos)
 {
-   
+    (void)cameraPos;
     if (m_activeDrops == 0 || m_intensity < 0.01f) return;
 
     // Update CB
