@@ -414,34 +414,56 @@ void ShipModel::InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
                        (UINT)ibSize, DXGI_FORMAT_R32_UINT };
 
         if (!m_texPaths[g].empty())
-            LoadTexture(grp, m_texPaths[g], cmdList);
+            LoadTexture(grp.diffuseTex, grp.diffuseUpload, m_texPaths[g], cmdList);
+        if (!m_normalPaths[g].empty())
+            LoadTexture(grp.normalTex, grp.normalUpload, m_normalPaths[g], cmdList);
+        if (!m_armPaths[g].empty())
+            LoadTexture(grp.armTex, grp.armUpload, m_armPaths[g], cmdList);
 
-        // SRV heap: [0]=diffuse, [1]=heightmap
+        // SRV heap: [0]=diffuse, [1]=normalMap, [2]=arm, [3]=heightmap
         {
             D3D12_DESCRIPTOR_HEAP_DESC hd = {};
             hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            hd.NumDescriptors = 2;
+            hd.NumDescriptors = 4;
             hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             ThrowIfFailed(m_device->CreateDescriptorHeap(&hd,
                 IID_PPV_ARGS(&grp.srvHeap)));
         }
 
-        CD3DX12_CPU_DESCRIPTOR_HANDLE handle(
-            grp.srvHeap->GetCPUDescriptorHandleForHeapStart());
-
-        // Slot 0: diffuse texture
-        if (grp.diffuseTex)
-        {
+        auto MakeTex2DSRV = []() {
             D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
             sd.Format                  = DXGI_FORMAT_R8G8B8A8_UNORM;
             sd.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
             sd.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
             sd.Texture2D.MipLevels     = 1;
+            return sd;
+        };
+
+        CD3DX12_CPU_DESCRIPTOR_HANDLE handle(
+            grp.srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+        // Slot 0: diffuse
+        if (grp.diffuseTex) {
+            auto sd = MakeTex2DSRV();
             m_device->CreateShaderResourceView(grp.diffuseTex.Get(), &sd, handle);
         }
         handle.Offset(1, m_srvIncr);
 
-        // Slot 1: heightmap
+        // Slot 1: normal map
+        if (grp.normalTex) {
+            auto sd = MakeTex2DSRV();
+            m_device->CreateShaderResourceView(grp.normalTex.Get(), &sd, handle);
+        }
+        handle.Offset(1, m_srvIncr);
+
+        // Slot 2: ARM (AO/roughness/metallic)
+        if (grp.armTex) {
+            auto sd = MakeTex2DSRV();
+            m_device->CreateShaderResourceView(grp.armTex.Get(), &sd, handle);
+        }
+        handle.Offset(1, m_srvIncr);
+
+        // Slot 3: heightmap
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
             sd.Format                  = DXGI_FORMAT_R32G32B32A32_FLOAT;
