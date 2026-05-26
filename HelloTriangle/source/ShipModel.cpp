@@ -54,12 +54,12 @@ void ShipModel::Init(
         m_shadowCB->Map(0, &r, reinterpret_cast<void**>(&m_mappedShadowCB));
     }
 
-    // Main root signature: [0]=CBV(b0), [1]=Table(2 SRVs: t0,t1), sampler s0
+    // Main root signature: [0]=CBV(b0), [1]=Table(4 SRVs: t0..t3), sampler s0
     {
         CD3DX12_ROOT_PARAMETER params[2];
         params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
         CD3DX12_DESCRIPTOR_RANGE srvRange;
-        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0);
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0);
         params[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
         CD3DX12_STATIC_SAMPLER_DESC sampler(0,
             D3D12_FILTER_MIN_MAG_MIP_LINEAR,
@@ -301,7 +301,19 @@ void ShipModel::LoadGLTF(const std::string& gltfDir)
         {
             const char* uri = mat.pbr_metallic_roughness
                 .base_color_texture.texture->image->uri;
-            if (uri) m_texPaths[grp] = baseDir + uri;
+            if (uri)
+            {
+                m_texPaths[grp] = baseDir + uri;
+                auto subst = [](const std::string& s,
+                                const std::string& from,
+                                const std::string& to) -> std::string {
+                    size_t pos = s.find(from);
+                    if (pos == std::string::npos) return s;
+                    return s.substr(0, pos) + to + s.substr(pos + from.size());
+                };
+                m_normalPaths[grp] = subst(m_texPaths[grp], "_diff_", "_nor_gl_");
+                m_armPaths[grp]    = subst(m_texPaths[grp], "_diff_", "_arm_");
+            }
         }
     }
 
