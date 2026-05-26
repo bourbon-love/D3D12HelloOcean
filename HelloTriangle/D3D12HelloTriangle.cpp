@@ -196,6 +196,16 @@ void D3D12HelloTriangle::LoadAssets()
         pCloudCompositePS, cloudCompositePsLen);
     free(pCloudVS); free(pCloudPS); free(pCloudCompositePS);
 
+    // RainbowEffect
+    UINT8 *pRainbowVS = nullptr, *pRainbowPS = nullptr;
+    UINT   rainbowVsLen = 0, rainbowPsLen = 0;
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"rainbow_RainbowVS.cso").c_str(), &pRainbowVS, &rainbowVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"rainbow_RainbowPS.cso").c_str(), &pRainbowPS, &rainbowPsLen));
+    m_rainbowEffect = std::make_unique<RainbowEffect>();
+    m_rainbowEffect->Init(m_device, m_width, m_height,
+        pRainbowVS, rainbowVsLen, pRainbowPS, rainbowPsLen);
+    free(pRainbowVS); free(pRainbowPS);
+
     // RainSystem
     UINT8 *pRainVS = nullptr, *pRainPS = nullptr;
     UINT   rainVsLen = 0, rainPsLen = 0;
@@ -217,6 +227,25 @@ void D3D12HelloTriangle::LoadAssets()
     m_floatingObject->Init(m_device, m_oceanFFT->GetHeightMap(), pFOVS, foVsLen, pFOPS, foPsLen);
     free(pFOVS); free(pFOPS);
 
+    // ShipModel
+    UINT8 *pShipVS = nullptr, *pShipPS = nullptr, *pShipShadowVS = nullptr;
+    UINT   shipVsLen = 0, shipPsLen = 0, shipShadowVsLen = 0;
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"ship_ShipVS.cso").c_str(),
+        &pShipVS, &shipVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"ship_ShipPS.cso").c_str(),
+        &pShipPS, &shipPsLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"ship_ShipShadowVS.cso").c_str(),
+        &pShipShadowVS, &shipShadowVsLen));
+    m_shipModel = std::make_unique<ShipModel>();
+    m_shipModel->Init(
+        m_device,
+        m_oceanFFT->GetHeightMap(),
+        "E:\\Study\\HelloDX12\\Assets\\dutch_ship_large_02_1k.gltf\\",
+        pShipVS, shipVsLen,
+        pShipPS, shipPsLen,
+        pShipShadowVS, shipShadowVsLen);
+    free(pShipVS); free(pShipPS); free(pShipShadowVS);
+
     // FishSchool
     UINT8 *pFishVS = nullptr, *pFishPS = nullptr;
     UINT   fishVsLen = 0, fishPsLen = 0;
@@ -235,6 +264,7 @@ void D3D12HelloTriangle::LoadAssets()
     m_skyDome->InitResources(m_commandList);
     m_renderer->InitResources(m_commandList);
     m_floatingObject->InitBuffers(m_commandList);
+    m_shipModel->InitBuffers(m_commandList);
     m_fishSchool->InitBuffers(m_commandList);
     m_fishSchool->SpawnSchool();
 
@@ -294,6 +324,28 @@ void D3D12HelloTriangle::OnUpdate()
 
     m_renderer->Update(scaledDt);
     m_weatherSystem->Update(scaledDt);
+
+    // Moisture accumulates during rain, decays ~50s after rain stops
+    {
+        constexpr float kAccum = 0.5f;
+        constexpr float kDecay = 1.0f / 20.0f; // ~20s to fully dissipate after rain stops
+        if (weatherIntensity > 0.2f)
+            m_rainMoisture += scaledDt * kAccum * ((weatherIntensity - 0.2f) / 0.8f);
+        else
+            m_rainMoisture -= scaledDt * kDecay;
+        m_rainMoisture = std::clamp(m_rainMoisture, 0.0f, 1.0f);
+    }
+
+    // Weather drives VolumetricClouds coverage when auto mode is on
+    if (m_autoCloudCoverage)
+        m_volumetricClouds->cloudCoverage = m_weatherSystem->GetCloudCoverage();
+
+    // Rainbow cloud clear factor: coverage > 0.70 suppresses rainbow entirely
+    {
+        float cov = m_volumetricClouds->cloudCoverage;
+        m_rainbowCloudFactor = std::clamp((0.70f - cov) / 0.40f, 0.0f, 1.0f);
+    }
+
     m_rainSystem->Update(scaledDt, weatherIntensity,
         m_oceanFFT->windDirX, m_oceanFFT->windDirY,
         m_renderer->GetCameraPos());
@@ -395,7 +447,16 @@ void D3D12HelloTriangle::BuildImGuiUI()
     ImGui::Checkbox("Enable Clouds", &m_volumetricClouds->enabled);
     if (m_volumetricClouds->enabled)
     {
-        ImGui::SliderFloat("Coverage", &m_volumetricClouds->cloudCoverage, 0.0f,    1.0f,    "%.2f");
+        ImGui::Checkbox("Auto Coverage", &m_autoCloudCoverage);
+        if (m_autoCloudCoverage)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("(weather driven)");
+            ImGui::Text("Coverage: %.2f  Clear: %.2f",
+                m_volumetricClouds->cloudCoverage, m_rainbowCloudFactor);
+        }
+        else
+            ImGui::SliderFloat("Coverage", &m_volumetricClouds->cloudCoverage, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("Density",  &m_volumetricClouds->densityMult,   0.1f,    3.0f,    "%.2f");
         ImGui::SliderFloat("Scale",    &m_volumetricClouds->cloudScale,    0.3f,    3.0f,    "%.2f");
         ImGui::SliderFloat("Base (m)", &m_volumetricClouds->cloudBase,     200.0f,  2000.0f, "%.0f");
@@ -415,7 +476,9 @@ void D3D12HelloTriangle::BuildImGuiUI()
     if (m_renderer->IsShowcaseMode())
     {
         float& h = m_renderer->GetCamera().m_showcaseHeight;
-        ImGui::SliderFloat("Cam Height", &h, -15.0f, 40.0f, "%.1f m");
+        float& s = m_renderer->GetCamera().m_showcaseSpeed;
+        ImGui::SliderFloat("Cam Height", &h, -15.0f, 40.0f,  "%.1f m");
+        ImGui::SliderFloat("Orbit Speed",&s,   0.0f,  1.5f,  "%.2f");
     }
 
     ImGui::End();
@@ -481,6 +544,17 @@ void D3D12HelloTriangle::BuildImGuiUI()
     if (m_pp->taaEnabled)
         ImGui::SliderFloat("History Blend", &m_pp->taaBlend, 0.5f, 0.98f, "%.2f");
 
+    // --- Rainbow ---
+    ImGui::Separator(); ImGui::TextColored({1.0f,0.8f,0.4f,1.0f}, "Rainbow");
+    ImGui::Checkbox("Enable Rainbow", &m_rainbowEffect->enabled);
+    if (m_rainbowEffect->enabled)
+    {
+        ImGui::SliderFloat("RB Intensity", &m_rainbowEffect->intensity,  0.0f, 3.0f, "%.2f");
+        ImGui::SliderFloat("Band Width",   &m_rainbowEffect->bandWidth,   0.5f, 6.0f, "%.1f");
+        ImGui::Checkbox("Secondary Bow",  &m_rainbowEffect->secondaryBow);
+        ImGui::Text("Moisture: %.2f", m_rainMoisture);
+    }
+
     ImGui::End();
 
     // ============================================================
@@ -526,9 +600,13 @@ void D3D12HelloTriangle::BuildImGuiUI()
     ImGui::TextDisabled("Weather"); ImGui::SameLine();
     bool isAuto = m_weatherSystem->IsAutoWeather();
     WeatherState cur = m_weatherSystem->GetCurrentState();
-    int weatherIdx = isAuto ? 0 : (cur == WeatherState::Calm ? 1 : cur == WeatherState::Windy ? 2 : 3);
-    const char* weatherLabels[] = { "Auto", "Calm", "Windy", "Storm" };
-    for (int i = 0; i < 4; i++)
+    int weatherIdx = isAuto ? 0
+        : cur == WeatherState::Calm    ? 1
+        : cur == WeatherState::Windy   ? 2
+        : cur == WeatherState::Storm   ? 3
+        : 4;
+    const char* weatherLabels[] = { "Auto", "Calm", "Windy", "Storm", "Tsunami" };
+    for (int i = 0; i < 5; i++)
     {
         if (i > 0) ImGui::SameLine();
         if (ImGui::RadioButton(weatherLabels[i], weatherIdx == i))
@@ -538,7 +616,8 @@ void D3D12HelloTriangle::BuildImGuiUI()
             {
                 m_weatherSystem->SetAutoWeather(false);
                 WeatherState states[] = { WeatherState::Calm, WeatherState::Calm,
-                                          WeatherState::Windy, WeatherState::Storm };
+                                          WeatherState::Windy, WeatherState::Storm,
+                                          WeatherState::Tsunami };
                 m_weatherSystem->SetWeather(states[i], 3.0f);
             }
         }
@@ -597,7 +676,8 @@ void D3D12HelloTriangle::OnRender()
 
     // ---- ShadowMap ----
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(80, 80, 80), L"ShadowMap");
-    m_pp->RenderShadowMap(m_commandList.Get(), m_skyDome.get(), m_renderer.get(), m_floatingObject.get());
+    m_pp->RenderShadowMap(m_commandList.Get(), m_skyDome.get(), m_renderer.get(),
+                          m_floatingObject.get(), m_shipModel.get());
     PIXEndEvent(m_commandList.Get());
 
     RenderContext ctx;
@@ -627,6 +707,21 @@ void D3D12HelloTriangle::OnRender()
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(100, 180, 255), L"SkyDome");
     m_skyDome->SetShowcaseMode(m_renderer->IsShowcaseMode());
     m_skyDome->Render(ctx);
+    PIXEndEvent(m_commandList.Get());
+
+    // ---- Rainbow ----
+    // Rendered before volumetric clouds so cloud alpha-blend naturally occludes it.
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(255, 180, 80), L"Rainbow");
+    {
+        RainbowEffect::Params rp;
+        rp.cameraPos    = m_renderer->GetCameraPos();
+        rp.sunDir       = m_skyDome->GetSunDirection();
+        rp.rainFactor   = m_rainMoisture * m_rainbowCloudFactor;
+        rp.sunIntensity = m_skyDome->GetSunIntensity();
+        rp.view         = m_renderer->GetViewMatrix();
+        rp.proj         = m_renderer->GetProjMatrix();
+        m_rainbowEffect->Render(m_commandList.Get(), ctx.rtv, m_viewport, m_scissorRect, rp);
+    }
     PIXEndEvent(m_commandList.Get());
 
     // ---- Volumetric Clouds ----
@@ -682,6 +777,33 @@ void D3D12HelloTriangle::OnRender()
     m_floatingObject->Render(ctx,
         m_skyDome->GetSunDirection(), m_skyDome->GetSunIntensity(),
         m_skyDome->GetSunColor(), m_renderer->GetCameraPos());
+    PIXEndEvent(m_commandList.Get());
+
+    // ---- Ship ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(139, 90, 43), L"Ship");
+    ShipCloudParams shipCloud {
+        m_renderer->GetTime(),
+        m_renderer->GetCloudCoverage(),    m_renderer->GetCloudScale(),
+        m_renderer->GetCloudBase(),        m_renderer->GetCloudTop(),
+        m_renderer->GetCloudWindX(),       m_renderer->GetCloudWindZ(),
+        m_renderer->GetCloudDensityMult(), m_renderer->GetCloudEnabled()
+    };
+    m_shipModel->Render(ctx,
+        m_skyDome->GetSunDirection(), m_skyDome->GetSunIntensity(),
+        m_skyDome->GetSunColor(),     m_renderer->GetCameraPos(),
+        m_skyDome->GetMoonDirection(), m_skyDome->GetMoonIntensity(),
+        m_skyDome->GetMoonColor(),    m_skyDome->GetLightningIntensity(),
+        shipCloud);
+    // Restore ocean root signature and SRV heap after ship changes them
+    m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
+    {
+        auto* shipRestoreHeap = m_pp->GetOceanSRVHeap();
+        ID3D12DescriptorHeap* shipRestoreHeaps[] = { shipRestoreHeap };
+        m_commandList->SetDescriptorHeaps(1, shipRestoreHeaps);
+        m_commandList->SetGraphicsRootDescriptorTable(1, shipRestoreHeap->GetGPUDescriptorHandleForHeapStart());
+        m_commandList->SetGraphicsRootConstantBufferView(2, m_rainSystem->GetRippleCBAddress());
+        m_commandList->SetGraphicsRootConstantBufferView(3, m_pp->GetShadowSceneCBAddr());
+    }
     PIXEndEvent(m_commandList.Get());
 
     // ---- Rain ----
@@ -773,8 +895,9 @@ void D3D12HelloTriangle::WaitForPreviousFrame()
 
 void D3D12HelloTriangle::OnKeyDown(UINT8 key)
 {
-    if (key == VK_F11) Win32Application::ToggleFullscreen();
-    if (key == VK_TAB) m_renderer->ToggleWireframe();
+    if (key == VK_F11)    Win32Application::ToggleFullscreen();
+    if (key == VK_TAB)    m_renderer->ToggleWireframe();
+    if (key == VK_SPACE)  m_timePaused = !m_timePaused;
 
     if (key == 'V')
     {
@@ -783,8 +906,9 @@ void D3D12HelloTriangle::OnKeyDown(UINT8 key)
         else
         { m_renderer->ToggleShowcase(); m_renderer->GetCamera().EnterShowcase(); }
     }
-    if (key == '1') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Calm,  5.0f); }
-    if (key == '2') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Windy, 5.0f); }
-    if (key == '3') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Storm, 5.0f); }
-    if (key == '4')   m_weatherSystem->SetAutoWeather(true);
+    if (key == '1') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Calm,    5.0f); }
+    if (key == '2') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Windy,   5.0f); }
+    if (key == '3') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Storm,   5.0f); }
+    if (key == '4') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Tsunami, 5.0f); }
+    if (key == '0')   m_weatherSystem->SetAutoWeather(true);
 }

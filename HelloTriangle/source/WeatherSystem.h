@@ -1,12 +1,14 @@
 ﻿#pragma once
 #include "OceanFFT.h"
 #include "SkyDome.h"
+#include <algorithm>
 
 enum class WeatherState
 {
     Calm,    // calm
     Windy,   // windy
     Storm,   // storm
+    Tsunami, // extreme waves, manual only
 };
 
 struct WeatherParams
@@ -18,6 +20,7 @@ struct WeatherParams
     float cloudDensity;
     float cloudScale;
     float weatherIntensity;
+    float tsunamiIntensity;  // 0 for Calm/Windy/Storm, 1 for Tsunami
 };
 
 class WeatherSystem
@@ -31,6 +34,17 @@ public:
 	void SetAutoWeather(bool autoWeather) { m_autoWeather = autoWeather; }
     bool IsAutoWeather() const { return m_autoWeather; }
     float GetWeatherIntensity() const { return m_currentParams.weatherIntensity; }
+
+    // Current cloud coverage [0,1] driven by weather state, used to set VolumetricClouds.
+    float GetCloudCoverage() const { return std::clamp(m_currentParams.cloudDensity, 0.0f, 1.0f); }
+
+    // Rainbow appears during rain (Storm/Windy). Returns 0..1.
+    float GetRainbowIntensity() const
+    {
+        return std::clamp((m_currentParams.weatherIntensity - 0.15f) / 0.50f, 0.0f, 1.0f);
+    }
+
+    float GetTsunamiIntensity() const { return m_currentParams.tsunamiIntensity; }
 
 private:
     OceanFFT* m_ocean = nullptr;

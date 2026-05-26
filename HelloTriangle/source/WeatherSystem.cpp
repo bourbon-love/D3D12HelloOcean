@@ -6,13 +6,15 @@ WeatherParams WeatherSystem::GetPreset(WeatherState state)
     switch (state)
     {
     case WeatherState::Calm:
-        return { 10.0f, 0.1f, 1.0f, 0.0f, 0.4f, 0.85f, 0.0f };
+        return { 10.0f, 0.1f, 1.0f, 0.0f, 0.10f, 0.85f, 0.0f }; // nearly clear sky
     case WeatherState::Windy:
-        return { 40.0f, 0.3f, 1.0f, 0.2f, 0.6f, 0.75f, 0.3f };
+        return { 40.0f, 0.3f, 1.0f, 0.2f, 0.45f, 0.75f, 0.3f }; // partly cloudy
     case WeatherState::Storm:
-        return { 75.0f, 0.8f, 1.0f, 0.4f, 1.2f, 0.65f, 1.0f };
+        return { 75.0f, 0.8f,   1.0f, 0.4f, 0.90f, 0.65f, 1.0f, 0.0f }; // heavily overcast
+    case WeatherState::Tsunami:
+        return { 160.0f, 3.5f, 1.0f, 0.5f, 1.00f, 0.60f, 1.0f, 1.0f }; // extreme waves, manual only
     default:
-        return { 10.0f, 0.1f, 1.0f, 0.0f, 0.4f, 0.85f, 0.0f };
+        return { 10.0f, 0.1f,  1.0f, 0.0f, 0.40f, 0.85f, 0.0f, 0.0f };
     }
 }
 
@@ -77,7 +79,8 @@ void WeatherSystem::Update(float deltaTime)
         m_currentParams.windDirY     = m_fromParams.windDirY + s * (m_targetParams.windDirY - m_fromParams.windDirY);
         m_currentParams.cloudDensity = m_fromParams.cloudDensity + s * (m_targetParams.cloudDensity - m_fromParams.cloudDensity);
         m_currentParams.cloudScale   = m_fromParams.cloudScale + s * (m_targetParams.cloudScale - m_fromParams.cloudScale);
-        m_currentParams.weatherIntensity = m_fromParams.weatherIntensity + s * (m_targetParams.weatherIntensity - m_fromParams.weatherIntensity);
+        m_currentParams.weatherIntensity  = m_fromParams.weatherIntensity  + s * (m_targetParams.weatherIntensity  - m_fromParams.weatherIntensity);
+        m_currentParams.tsunamiIntensity   = m_fromParams.tsunamiIntensity   + s * (m_targetParams.tsunamiIntensity   - m_fromParams.tsunamiIntensity);
 
         if (t >= 1.0f)
             m_inTransition = false;
