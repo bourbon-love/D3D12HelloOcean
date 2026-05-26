@@ -113,7 +113,7 @@ float4 ShipPS(VSOut i) : SV_Target
     float3 H = normalize(V + L);
 
     float NdotL = saturate(dot(N, L));
-    float NdotV = saturate(dot(N, V));
+    float NdotV = max(dot(N, V), 0.0001);
     float NdotH = saturate(dot(N, H));
     float VdotH = saturate(dot(V, H));
 
@@ -129,8 +129,10 @@ float4 ShipPS(VSOut i) : SV_Target
     float3 direct = (kd * albedo / PI + spec) * sunColor * sunIntensity * NdotL;
 
     // Sky-colored ambient: blend cool sky blue toward sun color by sun elevation
-    float3 skyAmb  = lerp(float3(0.10, 0.15, 0.25), sunColor, saturate(sunDir.y));
-    float3 ambient = albedo * (1.0 - metal) * ao * skyAmb * 0.30;
+    float3 skyAmb     = lerp(float3(0.10, 0.15, 0.25), sunColor, saturate(sunDir.y));
+    float3 diffAmb    = albedo * (1.0 - metal) * ao * skyAmb * 0.30;
+    float3 specAmb    = F0 * ao * skyAmb * 0.15;  // specular ambient for metals
+    float3 ambient    = diffAmb + specAmb;
 
     return float4(direct + ambient, 1.0);
 }
