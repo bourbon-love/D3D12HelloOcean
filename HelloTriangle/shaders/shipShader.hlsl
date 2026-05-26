@@ -14,7 +14,14 @@ cbuffer ShipCB : register(b0)
     float3  sunDir;         float sunIntensity;
     float3  sunColor;       float yaw;
     float3  cameraPos;      float pad0;
-    float4  pad[8];
+    float3  moonDir;        float moonIntensity;
+    float3  moonColor;      float lightningIntensity;
+    float   time;           float cloudCoverage;
+    float   cloudScale;     float cloudBase;
+    float   cloudTop;       float cloudWindX;
+    float   cloudWindZ;     float cloudDensityMult;
+    float   cloudEnabled;   float3 _cp0;
+    float4  _cp1[3];
 };
 
 cbuffer ShadowCB : register(b0)
@@ -51,15 +58,84 @@ VSOut ShipVS(VSIn v)
     float3 lp, ln;
     ApplyYawScale(v.pos, v.normal, scale, yaw, lp, ln);
 
-    float waveY = SampleWaveHeight(worldPos.xz);
-    float3 wp   = lp + float3(worldPos.x, waveY, worldPos.z);
+    // Sample heightmap at bow and starboard to compute wave-induced pitch/roll
+    const float STEP = 20.0;
+    float2 bowDir  = float2(-sin(yaw), cos(yaw));
+    float2 sideDir = float2( cos(yaw), sin(yaw));
+    float h0    = SampleWaveHeight(worldPos.xz);
+    float hFwd  = SampleWaveHeight(worldPos.xz + bowDir  * STEP);
+    float hSide = SampleWaveHeight(worldPos.xz + sideDir * STEP);
+
+    float pitchAngle = clamp(-atan2(hFwd  - h0, STEP), -0.44, 0.44);
+    float rollAngle  = clamp( atan2(hSide - h0, STEP), -0.44, 0.44);
+
+    // Pitch around X axis
+    float cp = cos(pitchAngle), sp = sin(pitchAngle);
+    float3 p1 = float3(lp.x, cp * lp.y - sp * lp.z, sp * lp.y + cp * lp.z);
+    float3 n1 = float3(ln.x, cp * ln.y - sp * ln.z, sp * ln.y + cp * ln.z);
+
+    // Roll around Z axis
+    float cr = cos(rollAngle), sr = sin(rollAngle);
+    float3 p2 = float3(cr * p1.x - sr * p1.y, sr * p1.x + cr * p1.y, p1.z);
+    float3 n2 = float3(cr * n1.x - sr * n1.y, sr * n1.x + cr * n1.y, n1.z);
+
+    float3 wp = p2 + float3(worldPos.x, h0, worldPos.z);
 
     VSOut o;
     o.clip  = mul(float4(wp, 1.0), viewProj);
     o.wPos  = wp;
-    o.wNorm = normalize(ln);
+    o.wNorm = normalize(n2);
     o.uv    = v.uv;
     return o;
+}
+
+// ---- Cloud shadow (same algorithm as ocean surface) ----
+float cs_hash(float3 p)
+{
+    p = frac(p * float3(443.897, 441.423, 437.195));
+    p += dot(p, p.yxz + 19.19);
+    return frac((p.x + p.y) * p.z);
+}
+float cs_vnoise(float3 p)
+{
+    float3 i = floor(p), f = frac(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return lerp(
+        lerp(lerp(cs_hash(i),               cs_hash(i+float3(1,0,0)), f.x),
+             lerp(cs_hash(i+float3(0,1,0)), cs_hash(i+float3(1,1,0)), f.x), f.y),
+        lerp(lerp(cs_hash(i+float3(0,0,1)), cs_hash(i+float3(1,0,1)), f.x),
+             lerp(cs_hash(i+float3(0,1,1)), cs_hash(i+float3(1,1,1)), f.x), f.y),
+        f.z);
+}
+float cs_fbm3(float3 p)
+{
+    return cs_vnoise(p) * 0.500
+         + cs_vnoise(p * 2.031) * 0.250
+         + cs_vnoise(p * 4.073) * 0.125;
+}
+float CloudShadow(float3 worldPos)
+{
+    if (cloudEnabled < 0.5 || sunDir.y <= 0.02) return 1.0;
+    float3 sd     = normalize(sunDir);
+    float  tStart = (cloudBase - worldPos.y) / max(sd.y, 0.02);
+    float  tEnd   = (cloudTop  - worldPos.y) / max(sd.y, 0.02);
+    if (tEnd <= tStart) return 1.0;
+    const int STEPS = 6;
+    float stepSize = (tEnd - tStart) / float(STEPS);
+    float sigma    = 0.0;
+    float3 drift   = float3(cloudWindX, 0.0, cloudWindZ) * time * 30.0;
+    [unroll]
+    for (int i = 0; i < STEPS; i++)
+    {
+        float  t       = tStart + (i + 0.5) * stepSize;
+        float3 p       = worldPos + sd * t;
+        float3 q       = (p + drift) * cloudScale * 0.00030;
+        float  base    = cs_fbm3(q);
+        float  thresh  = 0.56 - cloudCoverage * 0.44;
+        float  density = smoothstep(0.0, 0.35, base - thresh) * cloudDensityMult;
+        sigma += density * stepSize * 0.052;
+    }
+    return exp(-sigma * 2.0);
 }
 
 // Cotangent-frame TBN (Mikkelsen method — no vertex tangents needed)
@@ -103,13 +179,13 @@ float4 ShipPS(VSOut i) : SV_Target
     normSamp.g      = -normSamp.g;  // OpenGL normal map Y-flip for DirectX
     float3 arm      = g_arm.Sample(g_sampler, i.uv).rgb;
     float  ao       = arm.r;
-    float  rough    = max(arm.g, 0.04);
+    float  rough    = clamp(arm.g, 0.04, 0.65);  // cap to keep GGX lobe visible on wood
     float  metal    = arm.b;
 
     float3x3 TBN = CotangentFrame(normalize(i.wNorm), i.wPos, i.uv);
     float3 N = normalize(mul(normSamp, TBN));
     float3 V = normalize(cameraPos - i.wPos);
-    float3 L = normalize(-sunDir);
+    float3 L = normalize(sunDir);
     float3 H = normalize(V + L);
 
     float NdotL = saturate(dot(N, L));
@@ -124,17 +200,30 @@ float4 ShipPS(VSOut i) : SV_Target
     float3 F   = FresnelSchlick(VdotH, F0);
     float  G   = GeomSmith(NdotV, NdotL, a2);
 
-    float3 spec   = D * F * G;
+    float3 spec   = D * F * G * 2.0;  // x2 boost: wood F0=0.04 otherwise invisible
     float3 kd     = (1.0 - F) * (1.0 - metal);
-    float3 direct = (kd * albedo / PI + spec) * sunColor * sunIntensity * NdotL;
 
-    // Sky-colored ambient: blend cool sky blue toward sun color by sun elevation
-    float3 skyAmb     = lerp(float3(0.10, 0.15, 0.25), sunColor, saturate(sunDir.y));
-    float3 diffAmb    = albedo * (1.0 - metal) * ao * skyAmb * 0.30;
-    float3 specAmb    = F0 * ao * skyAmb * 0.15;  // specular ambient for metals
-    float3 ambient    = diffAmb + specAmb;
+    // cloudShad: per-pixel ray-march shadow from clouds above (sun only, day)
+    float  cloudShad = CloudShadow(i.wPos);
+    // cloudOcc: coverage-based uniform occlusion applied to moon and ambient (day+night)
+    float  cloudOcc  = cloudEnabled > 0.5 ? lerp(1.0, 0.20, cloudCoverage) : 1.0;
 
-    return float4(direct + ambient, 1.0);
+    float3 direct = (kd * albedo / PI + spec) * sunColor * sunIntensity * NdotL * cloudShad * 4.0;
+
+    // Moon: dimmed by cloud coverage so overcast night is noticeably darker
+    float moonNdotL  = saturate(dot(N, normalize(moonDir)));
+    float3 moonLight = kd * albedo / PI * moonColor * moonIntensity * moonNdotL * 6.0 * cloudOcc;
+
+    // Sky-colored ambient: also reduced under cloud cover
+    float3 skyAmb  = lerp(float3(0.10, 0.15, 0.25), sunColor, saturate(sunDir.y));
+    float3 diffAmb = albedo * (1.0 - metal) * ao * skyAmb * 0.40 * cloudOcc;
+    float3 specAmb = F0 * ao * skyAmb * 0.15 * cloudOcc;
+    float3 ambient = diffAmb + specAmb;
+
+    // Lightning: brief white flash illuminating the whole ship
+    float3 lightning = albedo * lightningIntensity * float3(0.85, 0.90, 1.0) * 0.6;
+
+    return float4(direct + moonLight + ambient + lightning, 1.0);
 }
 
 float4 ShipShadowVS(VSIn v) : SV_Position
