@@ -490,7 +490,7 @@ void ShipModel::Update(float dt, float windSpeed, float phillipsA, float windDir
 
     // Dominant wave: period based on wind speed (minimum 5 s)
     float amplitude  = phillipsA * 1.5f;
-    float wavePeriod = (std::max)(5.0f, sqrtf(windSpeed * 0.5f));
+    float wavePeriod = max(5.0f, sqrtf(windSpeed * 0.5f));
     float omega      = 2.0f * PI / wavePeriod;
     float k          = omega * omega / G;            // deep-water dispersion
 
@@ -513,10 +513,11 @@ void ShipModel::Update(float dt, float windSpeed, float phillipsA, float windDir
     float targetPitch = -(slope * (bowX * wdX + bowZ * wdZ) + slope2 * (bowX * (-wdZ) + bowZ * wdX));
     float targetRoll  =  (slope * (sideX * wdX + sideZ * wdZ) + slope2 * (sideX * (-wdZ) + sideZ * wdX));
 
-    // Spring-damper: 3-second natural period (heavy ship), damping ratio 0.25 (slightly underdamped)
-    constexpr float omegaN  = 2.0f * PI / 3.0f;
+    // Spring-damper: 5-second natural period, damping ratio 0.18
+    // τ ≈ 4.4 s — ship lags wave by several seconds and continues rocking after it passes
+    constexpr float omegaN  = 2.0f * PI / 5.0f;
     constexpr float springK = omegaN * omegaN;
-    constexpr float dampC   = 2.0f * 0.25f * omegaN;
+    constexpr float dampC   = 2.0f * 0.18f * omegaN;
 
     m_pitchVel += (targetPitch - m_pitch) * springK * dt - m_pitchVel * dampC * dt;
     m_pitch    += m_pitchVel * dt;
