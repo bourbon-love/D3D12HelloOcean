@@ -603,7 +603,6 @@ void D3D12HelloTriangle::BuildImGuiUI()
 
     // Group 2 — Weather
     NextGroup(2);
-    ImGui::TextDisabled("Weather"); ImGui::SameLine();
     bool isAuto = m_weatherSystem->IsAutoWeather();
     WeatherState cur = m_weatherSystem->GetCurrentState();
     int weatherIdx = isAuto ? 0
@@ -612,21 +611,32 @@ void D3D12HelloTriangle::BuildImGuiUI()
         : cur == WeatherState::Storm   ? 3
         : 4;
     const char* weatherLabels[] = { "Auto", "Calm", "Windy", "Storm", "Tsunami" };
-    for (int i = 0; i < 5; i++)
+    WeatherState weatherStates[] = { WeatherState::Calm, WeatherState::Calm,
+                                     WeatherState::Windy, WeatherState::Storm,
+                                     WeatherState::Tsunami };
+    auto clickWeather = [&](int i)
+    {
+        if (i == 0) m_weatherSystem->SetAutoWeather(true);
+        else
+        {
+            m_weatherSystem->SetAutoWeather(false);
+            float ttime = (weatherStates[i] == WeatherState::Tsunami) ? 20.0f : 10.0f;
+            m_weatherSystem->SetWeather(weatherStates[i], ttime);
+        }
+    };
+    // Row 1: label + mild weathers
+    ImGui::TextDisabled("Weather"); ImGui::SameLine();
+    for (int i = 0; i <= 2; i++)
     {
         if (i > 0) ImGui::SameLine();
-        if (ImGui::RadioButton(weatherLabels[i], weatherIdx == i))
-        {
-            if (i == 0) m_weatherSystem->SetAutoWeather(true);
-            else
-            {
-                m_weatherSystem->SetAutoWeather(false);
-                WeatherState states[] = { WeatherState::Calm, WeatherState::Calm,
-                                          WeatherState::Windy, WeatherState::Storm,
-                                          WeatherState::Tsunami };
-                m_weatherSystem->SetWeather(states[i], 3.0f);
-            }
-        }
+        if (ImGui::RadioButton(weatherLabels[i], weatherIdx == i)) clickWeather(i);
+    }
+    // Row 2: severe weathers — re-anchor to same X, one line down
+    ImGui::SetCursorPos(ImVec2(kBarStartX + 2 * kGroupW, kBarY + ImGui::GetTextLineHeightWithSpacing()));
+    for (int i = 3; i < 5; i++)
+    {
+        if (i > 3) ImGui::SameLine();
+        if (ImGui::RadioButton(weatherLabels[i], weatherIdx == i)) clickWeather(i);
     }
 
     // Group 3 — Floating Boxes
@@ -926,9 +936,9 @@ void D3D12HelloTriangle::OnKeyDown(UINT8 key)
         else
         { m_renderer->ToggleShowcase(); m_renderer->GetCamera().EnterShowcase(); }
     }
-    if (key == '1') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Calm,    5.0f); }
-    if (key == '2') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Windy,   5.0f); }
-    if (key == '3') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Storm,   5.0f); }
-    if (key == '4') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Tsunami, 5.0f); }
+    if (key == '1') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Calm,    10.0f); }
+    if (key == '2') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Windy,   10.0f); }
+    if (key == '3') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Storm,   10.0f); }
+    if (key == '4') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Tsunami, 20.0f); }
     if (key == '0')   m_weatherSystem->SetAutoWeather(true);
 }
