@@ -20,7 +20,8 @@ cbuffer ShipCB : register(b0)
     float   cloudScale;     float cloudBase;
     float   cloudTop;       float cloudWindX;
     float   cloudWindZ;     float cloudDensityMult;
-    float   cloudEnabled;   float3 _cp0;
+    float   cloudEnabled;   float pitch;
+    float   roll;           float _pad0;
     float4  _cp1[3];
 };
 
@@ -58,24 +59,15 @@ VSOut ShipVS(VSIn v)
     float3 lp, ln;
     ApplyYawScale(v.pos, v.normal, scale, yaw, lp, ln);
 
-    // Sample heightmap at bow and starboard to compute wave-induced pitch/roll
-    const float STEP = 20.0;
-    float2 bowDir  = float2(-sin(yaw), cos(yaw));
-    float2 sideDir = float2( cos(yaw), sin(yaw));
-    float h0    = SampleWaveHeight(worldPos.xz);
-    float hFwd  = SampleWaveHeight(worldPos.xz + bowDir  * STEP);
-    float hSide = SampleWaveHeight(worldPos.xz + sideDir * STEP);
+    // Wave Y position: sample heightmap at ship center
+    float h0 = SampleWaveHeight(worldPos.xz);
 
-    float pitchAngle = clamp(-atan2(hFwd  - h0, STEP), -0.44, 0.44);
-    float rollAngle  = clamp( atan2(hSide - h0, STEP), -0.44, 0.44);
-
-    // Pitch around X axis
-    float cp = cos(pitchAngle), sp = sin(pitchAngle);
+    // Pitch/roll supplied by CPU spring-damper (smooth, inertia-delayed)
+    float cp = cos(pitch), sp = sin(pitch);
     float3 p1 = float3(lp.x, cp * lp.y - sp * lp.z, sp * lp.y + cp * lp.z);
     float3 n1 = float3(ln.x, cp * ln.y - sp * ln.z, sp * ln.y + cp * ln.z);
 
-    // Roll around Z axis
-    float cr = cos(rollAngle), sr = sin(rollAngle);
+    float cr = cos(roll), sr = sin(roll);
     float3 p2 = float3(cr * p1.x - sr * p1.y, sr * p1.x + cr * p1.y, p1.z);
     float3 n2 = float3(cr * n1.x - sr * n1.y, sr * n1.x + cr * n1.y, n1.z);
 
