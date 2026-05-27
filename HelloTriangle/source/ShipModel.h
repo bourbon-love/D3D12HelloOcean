@@ -16,6 +16,11 @@
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 
+struct ShipCloudParams
+{
+    float time, coverage, scale, base, top, windX, windZ, densityMult, enabled;
+};
+
 class ShipModel
 {
 public:
@@ -31,10 +36,16 @@ public:
 
     void InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList);
 
+    // Advance spring-damper physics for pitch/roll (call before Render each frame)
+    void Update(float dt, float windSpeed, float phillipsA, float windDirX, float windDirY);
+
     void Render(
         RenderContext& ctx,
-        XMFLOAT3 sunDir,  float sunIntensity,
-        XMFLOAT3 sunColor, XMFLOAT3 cameraPos);
+        XMFLOAT3 sunDir,    float sunIntensity,
+        XMFLOAT3 sunColor,  XMFLOAT3 cameraPos,
+        XMFLOAT3 moonDir,   float moonIntensity,
+        XMFLOAT3 moonColor, float lightningIntensity,
+        const ShipCloudParams& cloud);
 
     void RenderDepth(
         ID3D12GraphicsCommandList* cmd,
@@ -62,12 +73,19 @@ private:
 
     struct alignas(256) ShipCB
     {
-        XMMATRIX viewProj;                       // 64
-        XMFLOAT3 worldPos;  float scale;         // 16
-        XMFLOAT3 sunDir;    float sunIntensity;  // 16
-        XMFLOAT3 sunColor;  float yaw;           // 16
-        XMFLOAT3 cameraPos; float pad0;          // 16
-        float    pad[32];                        // 128 -> total 256
+        XMMATRIX viewProj;                            // 64
+        XMFLOAT3 worldPos;      float scale;          // 16
+        XMFLOAT3 sunDir;        float sunIntensity;   // 16
+        XMFLOAT3 sunColor;      float yaw;            // 16
+        XMFLOAT3 cameraPos;     float pad0;           // 16
+        XMFLOAT3 moonDir;       float moonIntensity;  // 16
+        XMFLOAT3 moonColor;     float lightningIntensity; // 16
+        float    time;          float cloudCoverage;  //  8
+        float    cloudScale;    float cloudBase;      //  8
+        float    cloudTop;      float cloudWindX;     //  8
+        float    cloudWindZ;    float cloudDensityMult; // 8
+        float    cloudEnabled;  float pitch;          //  8
+        float    roll;          float pad1[13];       // 56 -> total 256
     };
     static_assert(sizeof(ShipCB) == 256);
 
@@ -93,6 +111,11 @@ private:
     ID3D12Resource*              m_heightMap    = nullptr;
     UINT                         m_srvIncr      = 0;
     std::string                  m_gltfDir;
+
+    // Spring-damper state for wave-induced pitch/roll
+    float m_pitch    = 0.0f, m_pitchVel = 0.0f;
+    float m_roll     = 0.0f, m_rollVel  = 0.0f;
+    float m_simTime  = 0.0f;
 
     // Temporary CPU-side storage between LoadGLTF and InitBuffers
     std::vector<Vertex>   m_cpuVerts[3];

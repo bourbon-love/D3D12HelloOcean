@@ -324,6 +324,9 @@ void D3D12HelloTriangle::OnUpdate()
 
     m_renderer->Update(scaledDt);
     m_weatherSystem->Update(scaledDt);
+    m_shipModel->Update(scaledDt,
+        m_oceanFFT->windSpeed, m_oceanFFT->phillipsA,
+        m_oceanFFT->windDirX,  m_oceanFFT->windDirY);
 
     // Moisture accumulates during rain, decays ~50s after rain stops
     {

@@ -9,6 +9,7 @@
 #include "stb_image.h"
 
 #include "ShipModel.h"
+#include <algorithm>
 #include <d3dx12_barriers.h>
 #include <d3dx12_core.h>
 #include <d3dx12_root_signature.h>
@@ -480,22 +481,86 @@ void ShipModel::InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
     }
 }
 
+void ShipModel::Update(float dt, float windSpeed, float phillipsA, float windDirX, float windDirY)
+{
+    m_simTime += dt;
+
+    constexpr float PI = 3.14159265f;
+    constexpr float G  = 9.81f;
+
+    // Dominant wave: period based on wind speed (minimum 5 s)
+    float amplitude  = phillipsA * 1.5f;
+    float wavePeriod = (std::max)(5.0f, sqrtf(windSpeed * 0.5f));
+    float omega      = 2.0f * PI / wavePeriod;
+    float k          = omega * omega / G;            // deep-water dispersion
+
+    // Normalize wind direction
+    float wdLen = sqrtf(windDirX * windDirX + windDirY * windDirY) + 1e-6f;
+    float wdX = windDirX / wdLen, wdZ = windDirY / wdLen;
+
+    // Primary wave phase at ship position
+    float phase = k * (worldPos.x * wdX + worldPos.z * wdZ) - omega * m_simTime;
+    float slope = amplitude * k * cosf(phase);
+
+    // Cross-swell: perpendicular direction at 70% frequency
+    float phase2 = k * 0.7f * (worldPos.x * (-wdZ) + worldPos.z * wdX) - omega * 0.7f * m_simTime;
+    float slope2 = amplitude * 0.35f * k * 0.7f * cosf(phase2);
+
+    // Ship bow/starboard directions (world XZ)
+    float bowX  = -sinf(yaw),  bowZ  =  cosf(yaw);
+    float sideX =  cosf(yaw),  sideZ =  sinf(yaw);
+
+    float targetPitch = -(slope * (bowX * wdX + bowZ * wdZ) + slope2 * (bowX * (-wdZ) + bowZ * wdX));
+    float targetRoll  =  (slope * (sideX * wdX + sideZ * wdZ) + slope2 * (sideX * (-wdZ) + sideZ * wdX));
+
+    // Spring-damper: 3-second natural period (heavy ship), damping ratio 0.25 (slightly underdamped)
+    constexpr float omegaN  = 2.0f * PI / 3.0f;
+    constexpr float springK = omegaN * omegaN;
+    constexpr float dampC   = 2.0f * 0.25f * omegaN;
+
+    m_pitchVel += (targetPitch - m_pitch) * springK * dt - m_pitchVel * dampC * dt;
+    m_pitch    += m_pitchVel * dt;
+    m_rollVel  += (targetRoll  - m_roll)  * springK * dt - m_rollVel  * dampC * dt;
+    m_roll     += m_rollVel * dt;
+
+    m_pitch = std::clamp(m_pitch, -0.44f, 0.44f);
+    m_roll  = std::clamp(m_roll,  -0.44f, 0.44f);
+}
+
 void ShipModel::Render(
     RenderContext& ctx,
-    XMFLOAT3 sunDir, float sunIntensity,
-    XMFLOAT3 sunColor, XMFLOAT3 cameraPos)
+    XMFLOAT3 sunDir,    float sunIntensity,
+    XMFLOAT3 sunColor,  XMFLOAT3 cameraPos,
+    XMFLOAT3 moonDir,   float moonIntensity,
+    XMFLOAT3 moonColor, float lightningIntensity,
+    const ShipCloudParams& cloud)
 {
     XMMATRIX vp = XMMatrixTranspose(ctx.view * ctx.proj);
 
-    ShipCB& cb      = *m_mappedCB;
-    cb.viewProj     = vp;
-    cb.worldPos     = worldPos;
-    cb.scale        = scale;
-    cb.sunDir       = sunDir;
-    cb.sunIntensity = sunIntensity;
-    cb.sunColor     = sunColor;
-    cb.yaw          = yaw;
-    cb.cameraPos    = cameraPos;
+    ShipCB& cb              = *m_mappedCB;
+    cb.viewProj             = vp;
+    cb.worldPos             = worldPos;
+    cb.scale                = scale;
+    cb.sunDir               = sunDir;
+    cb.sunIntensity         = sunIntensity;
+    cb.sunColor             = sunColor;
+    cb.yaw                  = yaw;
+    cb.cameraPos            = cameraPos;
+    cb.moonDir              = moonDir;
+    cb.moonIntensity        = moonIntensity;
+    cb.moonColor            = moonColor;
+    cb.lightningIntensity   = lightningIntensity;
+    cb.time                 = cloud.time;
+    cb.cloudCoverage        = cloud.coverage;
+    cb.cloudScale           = cloud.scale;
+    cb.cloudBase            = cloud.base;
+    cb.cloudTop             = cloud.top;
+    cb.cloudWindX           = cloud.windX;
+    cb.cloudWindZ           = cloud.windZ;
+    cb.cloudDensityMult     = cloud.densityMult;
+    cb.cloudEnabled         = cloud.enabled;
+    cb.pitch                = m_pitch;
+    cb.roll                 = m_roll;
 
     auto* cmd = ctx.cmd;
     cmd->SetGraphicsRootSignature(m_rootSig.Get());
