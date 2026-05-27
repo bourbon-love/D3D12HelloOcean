@@ -1,0 +1,10 @@
+# Debug symbols and linker artifacts
+*.pdb
+*.exp
+*.lib
+
+# ImGui layout cache
+imgui.ini
+
+# HLSL source files (compiled .cso files are sufficient at runtime)
+shaders/
