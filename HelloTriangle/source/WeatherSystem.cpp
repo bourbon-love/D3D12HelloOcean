@@ -1,5 +1,6 @@
 ﻿#include "WeatherSystem.h"
 #include <algorithm>
+#include <cmath>
 
 WeatherParams WeatherSystem::GetPreset(WeatherState state)
 {
@@ -73,8 +74,13 @@ void WeatherSystem::Update(float deltaTime)
         // smoothstep makes the transition feel more natural
         float s = t * t * (3.0f - 2.0f * t);
 
-        m_currentParams.windSpeed    = m_fromParams.windSpeed + s * (m_targetParams.windSpeed - m_fromParams.windSpeed);
-        m_currentParams.phillipsA    = m_fromParams.phillipsA + s * (m_targetParams.phillipsA - m_fromParams.phillipsA);
+        // log-space interpolation: wave height ~ sqrt(phillipsA) * windSpeed^2,
+        // so linear lerp in log space gives perceptually uniform ramp-up/down
+        auto logLerp = [](float a, float b, float u) {
+            return expf(logf(a) + u * (logf(b) - logf(a)));
+        };
+        m_currentParams.windSpeed    = logLerp(m_fromParams.windSpeed, m_targetParams.windSpeed, s);
+        m_currentParams.phillipsA    = logLerp(m_fromParams.phillipsA, m_targetParams.phillipsA, s);
         m_currentParams.windDirX     = m_fromParams.windDirX + s * (m_targetParams.windDirX - m_fromParams.windDirX);
         m_currentParams.windDirY     = m_fromParams.windDirY + s * (m_targetParams.windDirY - m_fromParams.windDirY);
         m_currentParams.cloudDensity = m_fromParams.cloudDensity + s * (m_targetParams.cloudDensity - m_fromParams.cloudDensity);
