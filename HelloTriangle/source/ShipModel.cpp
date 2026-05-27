@@ -481,40 +481,15 @@ void ShipModel::InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
     }
 }
 
-void ShipModel::Update(float dt, float windSpeed, float phillipsA, float windDirX, float windDirY)
+void ShipModel::Update(float dt, float h0, float hBow, float hSide)
 {
-    m_simTime += dt;
+    // Gradient from actual FFT heightmap: same formula as the old GPU version
+    constexpr float STEP = 20.0f;
+    float targetPitch = -(hBow  - h0) / STEP;
+    float targetRoll  =  (hSide - h0) / STEP;
 
-    constexpr float PI = 3.14159265f;
-    constexpr float G  = 9.81f;
-
-    // Dominant wave: period based on wind speed (minimum 5 s)
-    float amplitude  = phillipsA * 1.5f;
-    float wavePeriod = max(5.0f, sqrtf(windSpeed * 0.5f));
-    float omega      = 2.0f * PI / wavePeriod;
-    float k          = omega * omega / G;            // deep-water dispersion
-
-    // Normalize wind direction
-    float wdLen = sqrtf(windDirX * windDirX + windDirY * windDirY) + 1e-6f;
-    float wdX = windDirX / wdLen, wdZ = windDirY / wdLen;
-
-    // Primary wave phase at ship position
-    float phase = k * (worldPos.x * wdX + worldPos.z * wdZ) - omega * m_simTime;
-    float slope = amplitude * k * cosf(phase);
-
-    // Cross-swell: perpendicular direction at 70% frequency
-    float phase2 = k * 0.7f * (worldPos.x * (-wdZ) + worldPos.z * wdX) - omega * 0.7f * m_simTime;
-    float slope2 = amplitude * 0.35f * k * 0.7f * cosf(phase2);
-
-    // Ship bow/starboard directions (world XZ)
-    float bowX  = -sinf(yaw),  bowZ  =  cosf(yaw);
-    float sideX =  cosf(yaw),  sideZ =  sinf(yaw);
-
-    float targetPitch = -(slope * (bowX * wdX + bowZ * wdZ) + slope2 * (bowX * (-wdZ) + bowZ * wdX));
-    float targetRoll  =  (slope * (sideX * wdX + sideZ * wdZ) + slope2 * (sideX * (-wdZ) + sideZ * wdX));
-
-    // Spring-damper: 5-second natural period, damping ratio 0.18
-    // τ ≈ 4.4 s — ship lags wave by several seconds and continues rocking after it passes
+    // Spring-damper: 5-second natural period, damping ratio 0.18 (τ ≈ 4.4 s)
+    constexpr float PI      = 3.14159265f;
     constexpr float omegaN  = 2.0f * PI / 5.0f;
     constexpr float springK = omegaN * omegaN;
     constexpr float dampC   = 2.0f * 0.18f * omegaN;

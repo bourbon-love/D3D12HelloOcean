@@ -23,6 +23,17 @@ public:
         const UINT8* ifftCSData, UINT ifftCSSize);
     void Dispatch(ComPtr<ID3D12GraphicsCommandList> cmdList, float time);
 
+    // Height readback: records a copy of 3 texels to a staging buffer.
+    // Call after ocean draw (heightmap in NON_PIXEL_SHADER_RESOURCE).
+    // Results become available via ReadHeightSamples() on the next frame.
+    struct HeightSamples { float h0, hBow, hSide; };
+    void RecordHeightSamples(ID3D12GraphicsCommandList* cmd,
+                             float worldCX, float worldCZ,   // ship center
+                             float worldBX, float worldBZ,   // bow  (+20 m)
+                             float worldSX, float worldSZ);  // starboard (+20 m)
+    HeightSamples ReadHeightSamples() const;
+    bool HasHeightSamples() const { return m_heightSampleReady; }
+
     ID3D12Resource* GetHeightMap() const { return m_heightMap.Get(); }
     ID3D12Resource* GetDztMap()    const { return m_dztMap.Get(); }   // Added: Dz result
     ID3D12DescriptorHeap* GetSRVHeap()   const { return m_srvHeap.Get(); }
@@ -88,4 +99,13 @@ private:
     // Temporary objects used during initialization
     ComPtr<ID3D12CommandAllocator>    m_initAllocator;
     ComPtr<ID3D12GraphicsCommandList> m_initCmdList;
+
+    // Height readback staging (3 texels, 1-frame latency)
+    // Offset per slot = D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT (512)
+    // RowPitch per slot = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT (256)
+    static const UINT      kStagingSlots  = 3;
+    static const UINT      kStagingStride = 512;  // placement alignment
+    ComPtr<ID3D12Resource> m_heightStagingBuf;
+    UINT8*                 m_heightStagingMapped = nullptr;
+    bool                   m_heightSampleReady   = false;
 };

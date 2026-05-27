@@ -36,8 +36,8 @@ public:
 
     void InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList);
 
-    // Advance spring-damper physics for pitch/roll (call before Render each frame)
-    void Update(float dt, float windSpeed, float phillipsA, float windDirX, float windDirY);
+    // Advance spring-damper physics using actual FFT wave heights at 3 sample points
+    void Update(float dt, float h0, float hBow, float hSide);
 
     void Render(
         RenderContext& ctx,
@@ -115,7 +115,6 @@ private:
     // Spring-damper state for wave-induced pitch/roll
     float m_pitch    = 0.0f, m_pitchVel = 0.0f;
     float m_roll     = 0.0f, m_rollVel  = 0.0f;
-    float m_simTime  = 0.0f;
 
     // Temporary CPU-side storage between LoadGLTF and InitBuffers
     std::vector<Vertex>   m_cpuVerts[3];

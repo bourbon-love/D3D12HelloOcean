@@ -2,6 +2,7 @@
 #include <d3dx12_barriers.h>
 #include <d3dx12_root_signature.h>
 #include "../GpuMarkers.h"
+#include <cmath>
 
 struct PhillipsCB
 {
@@ -48,6 +49,18 @@ void OceanFFT::Init(
         ifftCSData, ifftCSSize);
     CreateConstantBuffers();
     RunPhillipsInit(cmdQueue);
+
+    // Persistent staging buffer for height readback (3 slots × 512 bytes = 1536 bytes)
+    {
+        auto hp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK);
+        auto bd = CD3DX12_RESOURCE_DESC::Buffer(kStagingSlots * kStagingStride);
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &hp, D3D12_HEAP_FLAG_NONE, &bd,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&m_heightStagingBuf)));
+        ThrowIfFailed(m_heightStagingBuf->Map(0, nullptr,
+            reinterpret_cast<void**>(&m_heightStagingMapped)));
+    }
 }
 
 // -----------------------------------------------
@@ -126,9 +139,6 @@ void OceanFFT::CreateDescriptorHeaps()
         ThrowIfFailed(m_device->CreateDescriptorHeap(
             &desc, IID_PPV_ARGS(&m_phillipsHeap)));
 
-        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
-        uavDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
-        uavDesc.ViewDimension = D3D12_UAV_DIMENSION_TEXTURE2D;
         m_device->CreateUnorderedAccessView(
             m_h0Map.Get(), nullptr, &uavDesc,
             m_phillipsHeap->GetCPUDescriptorHandleForHeapStart());
@@ -317,6 +327,76 @@ void OceanFFT::CreateConstantBuffers()
         IID_PPV_ARGS(&m_ifftCB)));
     ThrowIfFailed(m_ifftCB->Map(
         0, &readRange, reinterpret_cast<void**>(&m_ifftCBMapped)));
+}
+
+// -----------------------------------------------
+void OceanFFT::RecordHeightSamples(
+    ID3D12GraphicsCommandList* cmd,
+    float worldCX, float worldCZ,
+    float worldBX, float worldBZ,
+    float worldSX, float worldSZ)
+{
+    constexpr float kGridSize = 400.0f;  // GRID_WORLD_SIZE
+    auto frac = [](float v) { return v - floorf(v); };
+    auto toTexel = [&](float wx, float wz, UINT& tx, UINT& tz) {
+        tx = static_cast<UINT>(frac(wx / kGridSize) * m_textureSize) % m_textureSize;
+        tz = static_cast<UINT>(frac(wz / kGridSize) * m_textureSize) % m_textureSize;
+    };
+
+    const float wCoords[kStagingSlots][2] = {
+        { worldCX, worldCZ },
+        { worldBX, worldBZ },
+        { worldSX, worldSZ }
+    };
+
+    auto toCopy = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_heightMap.Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_COPY_SOURCE);
+    cmd->ResourceBarrier(1, &toCopy);
+
+    for (UINT i = 0; i < kStagingSlots; i++)
+    {
+        UINT tx, tz;
+        toTexel(wCoords[i][0], wCoords[i][1], tx, tz);
+
+        D3D12_TEXTURE_COPY_LOCATION src = {};
+        src.pResource        = m_heightMap.Get();
+        src.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        src.SubresourceIndex = 0;
+
+        D3D12_TEXTURE_COPY_LOCATION dst = {};
+        dst.pResource                          = m_heightStagingBuf.Get();
+        dst.Type                               = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        dst.PlacedFootprint.Offset             = i * kStagingStride;
+        dst.PlacedFootprint.Footprint.Format   = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        dst.PlacedFootprint.Footprint.Width    = 1;
+        dst.PlacedFootprint.Footprint.Height   = 1;
+        dst.PlacedFootprint.Footprint.Depth    = 1;
+        dst.PlacedFootprint.Footprint.RowPitch = D3D12_TEXTURE_DATA_PITCH_ALIGNMENT; // 256
+
+        D3D12_BOX box = { tx, tz, 0, tx + 1, tz + 1, 1 };
+        cmd->CopyTextureRegion(&dst, 0, 0, 0, &src, &box);
+    }
+
+    auto toSRV = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_heightMap.Get(),
+        D3D12_RESOURCE_STATE_COPY_SOURCE,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    cmd->ResourceBarrier(1, &toSRV);
+
+    m_heightSampleReady = true;
+}
+
+OceanFFT::HeightSamples OceanFFT::ReadHeightSamples() const
+{
+    if (!m_heightStagingMapped) return {};
+    constexpr float kScale = -1.0f / 1000.0f;  // matches shader: return -raw * FFT_HEIGHT_SCALE
+    auto rd = [&](UINT slot) -> float {
+        return reinterpret_cast<const float*>(
+            m_heightStagingMapped + slot * kStagingStride)[0] * kScale;
+    };
+    return { rd(0), rd(1), rd(2) };
 }
 
 // -----------------------------------------------

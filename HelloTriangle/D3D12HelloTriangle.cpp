@@ -324,9 +324,12 @@ void D3D12HelloTriangle::OnUpdate()
 
     m_renderer->Update(scaledDt);
     m_weatherSystem->Update(scaledDt);
-    m_shipModel->Update(scaledDt,
-        m_oceanFFT->windSpeed, m_oceanFFT->phillipsA,
-        m_oceanFFT->windDirX,  m_oceanFFT->windDirY);
+    {
+        OceanFFT::HeightSamples hs = m_oceanFFT->HasHeightSamples()
+            ? m_oceanFFT->ReadHeightSamples()
+            : OceanFFT::HeightSamples{};
+        m_shipModel->Update(scaledDt, hs.h0, hs.hBow, hs.hSide);
+    }
 
     // Moisture accumulates during rain, decays ~50s after rain stops
     {
@@ -808,6 +811,20 @@ void D3D12HelloTriangle::OnRender()
         m_commandList->SetGraphicsRootConstantBufferView(3, m_pp->GetShadowSceneCBAddr());
     }
     PIXEndEvent(m_commandList.Get());
+
+    // ---- Height readback for ship physics (1-frame latency) ----
+    {
+        constexpr float STEP = 20.0f;
+        float sx  = m_shipModel->worldPos.x;
+        float sz  = m_shipModel->worldPos.z;
+        float yaw = m_shipModel->yaw;
+        float bx  = -sinf(yaw), bz = cosf(yaw);   // bow direction
+        float rx  =  cosf(yaw), rz = sinf(yaw);   // starboard direction
+        m_oceanFFT->RecordHeightSamples(m_commandList.Get(),
+            sx,                sz,
+            sx + bx * STEP,    sz + bz * STEP,
+            sx + rx * STEP,    sz + rz * STEP);
+    }
 
     // ---- Rain ----
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(150, 210, 255), L"Rain");
