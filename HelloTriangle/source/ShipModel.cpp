@@ -499,8 +499,37 @@ void ShipModel::Update(float dt, float h0, float hBow, float hSide)
     m_rollVel  += (targetRoll  - m_roll)  * springK * dt - m_rollVel  * dampC * dt;
     m_roll     += m_rollVel * dt;
 
-    m_pitch = std::clamp(m_pitch, -0.44f, 0.44f);
-    m_roll  = std::clamp(m_roll,  -0.44f, 0.44f);
+    // Soft limit: extra restoring force that grows linearly beyond kSoftAngle,
+    // simulating increasing hull buoyancy resistance at large heel angles.
+    // At the hard limit, zero velocity only in the wall-pressing direction so
+    // the returning spring energy (rebound) is preserved.
+    constexpr float kSoftAngle = 0.22f;  // ~12.6 deg — soft resistance starts
+    constexpr float kHardAngle = 0.44f;  // ~25 deg   — absolute limit
+    constexpr float kSoftMult  = 10.0f;  // extra-spring multiplier at hard limit
+
+    auto applySoftLimit = [&](float& angle, float& vel)
+    {
+        float excess = fabsf(angle) - kSoftAngle;
+        if (excess > 0.0f)
+        {
+            float t      = excess / (kHardAngle - kSoftAngle);   // 0→1 as angle→hard
+            float extraK = springK * kSoftMult * t;
+            vel -= (angle > 0.0f ? 1.0f : -1.0f) * extraK * excess * dt;
+        }
+        if (angle > kHardAngle)
+        {
+            angle = kHardAngle;
+            if (vel > 0.0f) vel = 0.0f;   // kill push-direction only
+        }
+        else if (angle < -kHardAngle)
+        {
+            angle = -kHardAngle;
+            if (vel < 0.0f) vel = 0.0f;
+        }
+    };
+
+    applySoftLimit(m_pitch, m_pitchVel);
+    applySoftLimit(m_roll,  m_rollVel);
 }
 
 void ShipModel::Render(
