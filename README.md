@@ -186,3 +186,22 @@ shaders/
 ├── skyShaders.hlsl               Sky dome VS/PS
 └── ...                           Post-process shaders (bloom, godrays, taa, …)
 ```
+
+---
+
+## Update Log
+
+| Date | Feature |
+|---|---|
+| 2026-05-27 | **Ship tilt physics** — CPU spring-damper (5 s natural period, ζ = 0.18) driven by GPU FFT height readback (CopyTextureRegion, 1-frame latency); soft angle limit with progressive restoring force |
+| 2026-05-27 | **Weather transitions** — log-space interpolation for phillipsA / windSpeed; 10 s ramp for Calm/Windy/Storm, 20 s for Tsunami; 2-row weather button layout |
+| 2026-05-26 | **Ship PBR** — Cook-Torrance GGX BRDF with normal map and ARM (AO/Roughness/Metallic) texture support |
+| 2026-05-26 | **Tsunami weather** — extreme wave preset (windSpeed 160, phillipsA 3.5), manual-only mode |
+| 2026-05-26 | **GLTF ship model** — runtime GLTF loader (cgltf), multi-group mesh (hull / rigging / sails), shadow map pass |
+| 2026-05-17 | **Cloud shadow** — per-surface ray march toward sun using 3-octave FBM; gradient noise replacing value noise to eliminate fingerprint artifacts; rain system fixes; full UI overhaul |
+| 2026-05-15 | **Volumetric clouds** — half-resolution ray-marching (8× speedup), Henyey-Greenstein phase, Beer-Lambert extinction |
+| 2026-05-12 | JONSWAP spectrum upgrade, fullscreen toggle, 1080p resolution |
+| 2026-05-06 | **Fish school** — CPU Boids flocking (separation / alignment / cohesion) driving GPU instanced rendering; underwater Beer-Lambert fog effects; PostProcessPipeline refactor |
+| 2026-04-29 | Depth of Field, Lens Flare, Bloom, God Rays post-process effects |
+| 2026-04-28 | ImGui UI integration; moon crescent rendering; smooth day/night lighting transition |
+| 2026-04-22 | FFT ocean simulation v1.0 — JONSWAP spectrum + Cooley-Tukey Radix-2 IFFT on GPU |
