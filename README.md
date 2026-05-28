@@ -13,7 +13,7 @@ A real-time ocean renderer built from scratch with DirectX 12 and C++20. The oce
 ![Daytime Ocean](screenshots/ocean_day.png)
 
 <!-- Screenshot 2: volumetric clouds / night scene — replace path with your image -->
-![Volumetric Clouds](screenshots/clouds_night.png)
+![renderDocSS](screenshots/renderDocSS.png)
 
 ---
 
