@@ -63,6 +63,7 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <span class="nav-title">🌤️ IBL 教程</span>
   <button class="nav-btn active" onclick="navTo('s1',this)">① 程序化天空</button>
   <button class="nav-btn" onclick="navTo('s2',this)">② 方向→面映射</button>
+  <button class="nav-btn" onclick="navTo('s3',this)">③ split-sum BRDF</button>
 </nav>
 
 <!-- ══════════════ S1: 为什么程序化天空能跳过 cubemap 光栅化 ══════════════ -->
@@ -156,6 +157,40 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <div class="insight">这处映射一旦写错符号或轴序，渲染结果<strong>不会报错也不会崩溃</strong>——只会让捕获到的天空看起来"转了个方向""镜像了"或"和实际天空对不上"。
   这种 bug 没法靠编译器或验证层抓到，只能靠肉眼比对调试预览（Task 7：六个面分别截图，和游戏里抬头看到的天空逐一核对）才能发现，
   是整个 Phase A 里最容易踩坑、也最难自动测试出来的一步。</div>
+</section>
+
+<!-- ══════════════ S3: split-sum BRDF 近似 ══════════════ -->
+<section class="section" id="s3">
+  <h2><span class="sec-num">3</span>split-sum 近似：把一个积分拆成两半各自预算</h2>
+  <p class="subtitle">IBL 的镜面环境光照本质上是"在整个半球环境光上对 BRDF 做积分"——逐像素实时算这种积分太贵了。Karis 的 split-sum 近似把它拆成两个可以
+  分别预先算好的部分：一半只跟"观察角度和粗糙度"有关，与具体材质、具体环境贴图都无关——这正是 <code>BRDFLutCS.hlsl</code> 一次性烘焙出来的这张 2D LUT；
+  另一半只跟材质的 <code>F0</code>（菲涅耳基础反射率）有关，运行时一行 <code>F0 * scale + bias</code> 就能算出来。拖动下面两个滑块，实时用 JS 重新实现
+  <code>IntegrateBRDF()</code>，和热力图（红 = scale 通道，绿 = bias 通道，正是实际 LUT 的 RG16F 编码）对照着看。</p>
+  <div class="formula">
+    specular_IBL &nbsp;≈&nbsp; <span>prefilteredColor</span>(R, roughness) &nbsp;<em>×</em>&nbsp; ( <b>F0</b> · scale(NdotV, roughness) + bias(NdotV, roughness) )<br>
+    └── 环境部分：预滤波 cubemap（Phase C）──┘ &nbsp;&nbsp; └────── <b>这张 LUT</b>：与材质无关，只烘焙一次 ──────┘ &nbsp; └ 材质部分：每像素 F0 ┘
+  </div>
+  <div class="canvas-wrap">
+    <canvas id="c3" height="280"></canvas>
+    <div class="canvas-label">BRDF 积分热力图（R = scale, G = bias）— 白点 = 当前 (NdotV, roughness)</div>
+  </div>
+  <div class="controls">
+    <div class="ctrl-group">
+      <label>NdotV<span id="v3ndv">0.50</span></label>
+      <input type="range" id="r3ndv" min="0" max="1" step="0.01" value="0.50">
+      <label>roughness<span id="v3rough">0.30</span></label>
+      <input type="range" id="r3rough" min="0" max="1" step="0.01" value="0.30">
+    </div>
+  </div>
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-val" id="s3scale">—</div><div class="stat-lbl">scale（LUT 的 R 通道）</div></div>
+    <div class="stat-card"><div class="stat-val" id="s3bias">—</div><div class="stat-lbl">bias（LUT 的 G 通道）</div></div>
+    <div class="stat-card"><div class="stat-val" id="s3final">—</div><div class="stat-lbl">F0=0.04 时：F0·scale+bias</div></div>
+  </div>
+  <div class="insight">这张 LUT 只有两个输入——NdotV 和 roughness——跟场景里有什么、天空长什么样、材质是什么完全无关，所以
+  <code>IBLSystem::Init</code> 只需要生成<strong>一次</strong>就能永久复用，是整条 IBL 管线里"预算得最彻底"的一环。
+  再看热力图本身：低粗糙度 + 高 NdotV（视线接近法线、表面接近镜面）的角落，<code>(scale, bias)</code> 迅速逼近 <code>(1, 0)</code>——
+  这正是"正对镜面时反射率趋于 F0、掠射角时趋于 1"这一菲涅耳物理直觉，在数值上的直接体现。</div>
 </section>
 
 <script>
@@ -388,9 +423,125 @@ function drawS2(){
   requestAnimationFrame(drawS2);
 }
 
+// ─── S3: split-sum BRDF integration (re-implements IntegrateBRDF from BRDFLutCS.hlsl) ──
+// Same Hammersley/GGX-importance-sampling/Smith-geometry pipeline as the
+// compute shader, just re-expressed in JS so the reader can scrub (NdotV,
+// roughness) and watch the exact integral the LUT bakes converge live.
+function radicalInverseVdC3(bits){
+  bits = ((bits << 16) | (bits >>> 16)) >>> 0;
+  bits = (((bits & 0x55555555) << 1) | ((bits & 0xAAAAAAAA) >>> 1)) >>> 0;
+  bits = (((bits & 0x33333333) << 2) | ((bits & 0xCCCCCCCC) >>> 2)) >>> 0;
+  bits = (((bits & 0x0F0F0F0F) << 4) | ((bits & 0xF0F0F0F0) >>> 4)) >>> 0;
+  bits = (((bits & 0x00FF00FF) << 8) | ((bits & 0xFF00FF00) >>> 8)) >>> 0;
+  return bits * 2.3283064365386963e-10; // / 2^32
+}
+function hammersley3(i, n){ return [i / n, radicalInverseVdC3(i)]; }
+function importanceSampleGGX3(xi, roughness){
+  // N is fixed to (0,0,1) in this local frame, so the tangent-space H
+  // *is* the world-space H — no basis change needed (matches the shader's
+  // logic when N = (0,0,1), just skipping the redundant matrix build).
+  const a = roughness * roughness;
+  const phi      = 2 * Math.PI * xi[0];
+  const cosTheta = Math.sqrt((1 - xi[1]) / (1 + (a * a - 1) * xi[1]));
+  const sinTheta = Math.sqrt(Math.max(0, 1 - cosTheta * cosTheta));
+  return [Math.cos(phi) * sinTheta, Math.sin(phi) * sinTheta, cosTheta];
+}
+function geometrySchlickGGX_IBL3(NdotX, roughness){
+  const k = (roughness * roughness) / 2;
+  return NdotX / (NdotX * (1 - k) + k);
+}
+function integrateBRDF3(NdotV, roughness, sampleCount){
+  const V = [Math.sqrt(Math.max(0, 1 - NdotV * NdotV)), 0, NdotV];
+  let A = 0, B = 0;
+  for(let i = 0; i < sampleCount; i++){
+    const xi = hammersley3(i, sampleCount);
+    const H  = importanceSampleGGX3(xi, roughness);
+    const VdotH = Math.max(V[0]*H[0] + V[1]*H[1] + V[2]*H[2], 0);
+    const L  = [2*VdotH*H[0]-V[0], 2*VdotH*H[1]-V[1], 2*VdotH*H[2]-V[2]];
+    const NdotL = Math.max(L[2], 0), NdotH = Math.max(H[2], 0);
+    if(NdotL > 0){
+      const G = geometrySchlickGGX_IBL3(NdotL, roughness) * geometrySchlickGGX_IBL3(NdotV, roughness);
+      const Gvis = (G * VdotH) / (NdotH * NdotV);
+      const Fc = Math.pow(1 - VdotH, 5);
+      A += (1 - Fc) * Gvis;
+      B += Fc * Gvis;
+    }
+  }
+  return [A / sampleCount, B / sampleCount];
+}
+
+const s3 = { ndotv: 0.50, rough: 0.30 };
+const c3 = document.getElementById('c3');
+let ctx3, lut3 = null;
+
+// Precompute a small heatmap once (low res / sample count — this is purely an
+// illustration of the LUT's *shape*, not a faithful re-bake of it).
+function buildLUT3(size, sampleCount){
+  const data = new Float32Array(size*size*2);
+  for(let y=0; y<size; y++){
+    const rough = (y+0.5)/size;
+    for(let x=0; x<size; x++){
+      const ndv = (x+0.5)/size;
+      const [scale,bias] = integrateBRDF3(ndv, rough, sampleCount);
+      data[(y*size+x)*2+0] = scale;
+      data[(y*size+x)*2+1] = bias;
+    }
+  }
+  const off = document.createElement('canvas');
+  off.width = size; off.height = size;
+  const octx = off.getContext('2d');
+  const img = octx.createImageData(size, size);
+  for(let i=0; i<size*size; i++){
+    img.data[i*4+0] = clamp(data[i*2+0],0,1)*255;
+    img.data[i*4+1] = clamp(data[i*2+1],0,1)*255;
+    img.data[i*4+2] = 60;
+    img.data[i*4+3] = 255;
+  }
+  octx.putImageData(img,0,0);
+  return off;
+}
+
+function drawS3(){
+  if(!ctx3) return;
+  if(!lut3) lut3 = buildLUT3(28, 40);
+
+  const cw=W(c3), ch=H(c3);
+  ctx3.clearRect(0,0,cw,ch);
+
+  const sz = Math.min(cw - 70, ch - 46);
+  const hx = (cw-sz)/2, hy = 14;
+
+  ctx3.imageSmoothingEnabled = true;
+  ctx3.drawImage(lut3, hx, hy, sz, sz);
+  ctx3.lineWidth = 1; ctx3.strokeStyle = COL_BORDER;
+  ctx3.strokeRect(hx+0.5, hy+0.5, sz, sz);
+
+  ctx3.fillStyle = COL_TEXT2; ctx3.font = '11px sans-serif'; ctx3.textAlign = 'center';
+  ctx3.fillText('NdotV → (0 → 1)', hx+sz/2, hy+sz+18);
+  ctx3.save();
+  ctx3.translate(hx-26, hy+sz/2);
+  ctx3.rotate(-Math.PI/2);
+  ctx3.fillText('roughness → (0 → 1)', 0, 0);
+  ctx3.restore();
+
+  const mx = hx + clamp(s3.ndotv,0,1)*sz;
+  const my = hy + clamp(s3.rough,0,1)*sz;
+  ctx3.beginPath(); ctx3.arc(mx,my,5,0,Math.PI*2);
+  ctx3.fillStyle = '#fff'; ctx3.fill();
+  ctx3.lineWidth = 2; ctx3.strokeStyle = COL_RED; ctx3.stroke();
+
+  const [scale, bias] = integrateBRDF3(Math.max(s3.ndotv, 1e-3), Math.max(s3.rough, 1e-3), 200);
+  setTxt('s3scale', scale.toFixed(3));
+  setTxt('s3bias',  bias.toFixed(3));
+  setTxt('s3final', (0.04*scale + bias).toFixed(3));
+
+  requestAnimationFrame(drawS3);
+}
+
 window.addEventListener('load', () => {
   ctx1 = initCanvas(c1);
   ctx2 = initCanvas(c2);
+  ctx3 = initCanvas(c3);
 
   bind('r1t', 'v1t', v => fmtClock(+v), v => { s1.t = v; });
   const r1t = document.getElementById('r1t');
@@ -402,13 +553,18 @@ window.addEventListener('load', () => {
   bind('r2az', 'v2az', v => Math.round(+v)+'°', v => { s2.az = v*Math.PI/180; });
   bind('r2el', 'v2el', v => Math.round(+v)+'°', v => { s2.el = v*Math.PI/180; });
 
+  bind('r3ndv',   'v3ndv',   v => (+v).toFixed(2), v => { s3.ndotv = +v; });
+  bind('r3rough', 'v3rough', v => (+v).toFixed(2), v => { s3.rough  = +v; });
+
   drawS1();
   drawS2();
+  drawS3();
 });
 
 window.addEventListener('resize', () => {
   ctx1 = initCanvas(c1);
   ctx2 = initCanvas(c2);
+  ctx3 = initCanvas(c3);
 });
 </script>
 </body>
