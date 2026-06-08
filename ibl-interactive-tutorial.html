@@ -62,6 +62,7 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
 <nav id="topnav">
   <span class="nav-title">🌤️ IBL 教程</span>
   <button class="nav-btn active" onclick="navTo('s1',this)">① 程序化天空</button>
+  <button class="nav-btn" onclick="navTo('s2',this)">② 方向→面映射</button>
 </nav>
 
 <!-- ══════════════ S1: 为什么程序化天空能跳过 cubemap 光栅化 ══════════════ -->
@@ -118,6 +119,43 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <div class="insight">天空根本没有"表面"可供光栅化——它从一开始就是一张关于<strong>方向</strong>的函数表。把这张表写进 cubemap，还是画在头顶的天空穹顶上，
   调用的都应该是同一个 <code>EvalSkyRadiance()</code>；唯一变化的只是"谁在问方向"。这正是把它拆进 <code>SkyCommon.hlsli</code> 的意义所在——确保穹顶和
   IBL 捕获两边问到的答案永远一致，也是 Phase A 的 <code>SkyCaptureCS.hlsl</code> 能直接跳过光栅化、退化成一次 compute dispatch 的根本原因。</div>
+</section>
+
+<!-- ══════════════ S2: 方向 ↔ cubemap 面/UV 映射 ══════════════ -->
+<section class="section" id="s2">
+  <h2><span class="sec-num">2</span>方向 ↔ cubemap 面 / UV 映射</h2>
+  <p class="subtitle"><code>SkyCaptureCS.hlsl</code> 里的 <code>FaceUVToDirection(face, uv)</code> 把"面索引 + 面内 UV"转换成一个方向向量，供
+  <code>EvalSkyRadiance()</code> 求值。下面这个展开图做的是<strong>逆运算</strong>：给定一个方向，反推它落在 6 个面中的哪一个、以及在该面内的 UV 坐标——
+  这正是验证 <code>FaceUVToDirection</code> 是否写对的方式（两者必须互为逆函数）。拖动方位角 / 仰角滑块，或点击预设方向，看方向向量"掉进"展开图里的哪一格。</p>
+  <div class="formula">
+    face = argmax(<span>|dir.x|</span>, <span>|dir.y|</span>, <span>|dir.z|</span>) &nbsp;<em>// 哪个轴分量绝对值最大，方向就落在该轴对应的面上</em><br>
+    uv = (面内另外两个分量) / <b>主导分量的绝对值</b> &nbsp;<em>// FaceUVToDirection() 的逆运算 —— D3D 的 +X/-X/+Y/-Y/+Z/-Z 面顺序约定</em>
+  </div>
+  <div class="canvas-wrap">
+    <canvas id="c2" height="280"></canvas>
+    <div class="canvas-label">cubemap 展开图（横十字布局）— 红点 = 方向命中的面内 UV 位置</div>
+  </div>
+  <div class="controls">
+    <div class="ctrl-group">
+      <label>方位角 azimuth<span id="v2az">29°</span></label>
+      <input type="range" id="r2az" min="-180" max="180" step="1" value="29">
+      <label>仰角 elevation<span id="v2el">31°</span></label>
+      <input type="range" id="r2el" min="-89" max="89" step="1" value="31">
+    </div>
+    <div class="ctrl-group" style="flex-direction:row;flex-wrap:wrap;gap:8px;align-items:center">
+      <button class="btn" onclick="setDirPreset(0,89)">↑ 天顶 (+Y)</button>
+      <button class="btn" onclick="setDirPreset(90,0)">→ +X 水平</button>
+      <button class="btn" onclick="setDirPreset(-135,-40)">↘ 棱角附近（边界情况）</button>
+    </div>
+  </div>
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-val" id="s2dir">—</div><div class="stat-lbl">方向向量 dir</div></div>
+    <div class="stat-card"><div class="stat-val" id="s2face">—</div><div class="stat-lbl">命中的面</div></div>
+    <div class="stat-card"><div class="stat-val" id="s2uv">—</div><div class="stat-lbl">面内 UV 坐标</div></div>
+  </div>
+  <div class="insight">这处映射一旦写错符号或轴序，渲染结果<strong>不会报错也不会崩溃</strong>——只会让捕获到的天空看起来"转了个方向""镜像了"或"和实际天空对不上"。
+  这种 bug 没法靠编译器或验证层抓到，只能靠肉眼比对调试预览（Task 7：六个面分别截图，和游戏里抬头看到的天空逐一核对）才能发现，
+  是整个 Phase A 里最容易踩坑、也最难自动测试出来的一步。</div>
 </section>
 
 <script>
@@ -261,8 +299,98 @@ function drawS1(){
   requestAnimationFrame(drawS1);
 }
 
+// ─── S2: direction <-> cubemap face/UV mapping ──────────────────────────────
+// dirToFaceUV() is the exact inverse of FaceUVToDirection() in SkyCaptureCS.hlsl
+// (same D3D face-order convention: +X,-X,+Y,-Y,+Z,-Z) — re-derived here so the
+// reader can confirm the two are mutually consistent by eye.
+const FACE_NAMES = ['+X', '-X', '+Y（天顶）', '-Y（天底）', '+Z', '-Z'];
+const FACE_GRID  = { 0:[2,1], 1:[0,1], 2:[1,0], 3:[1,2], 4:[1,1], 5:[3,1] }; // face -> [col,row] in the cross net
+const COL_ACCENT = '#58a6ff', COL_BORDER = '#30363d', COL_TEXT2 = '#8b949e', COL_RED = '#f85149';
+
+const s2 = { az: 29*Math.PI/180, el: 31*Math.PI/180 };
+const c2 = document.getElementById('c2');
+let ctx2;
+
+function dirFromAzEl(az, el){
+  return [Math.cos(el)*Math.cos(az), Math.sin(el), Math.cos(el)*Math.sin(az)];
+}
+// Inverse of FaceUVToDirection(face, uv): given a direction, find which face's
+// "argmax(|component|)" it belongs to, and solve for uv from that face's
+// (sign, axis) assignment in the forward mapping.
+function dirToFaceUV(d){
+  const ax=Math.abs(d[0]), ay=Math.abs(d[1]), az=Math.abs(d[2]);
+  let face, ma, u, v;
+  if(ax >= ay && ax >= az){
+    ma = ax;
+    if(d[0] > 0){ face=0; u = -d[2]/ma; v = -d[1]/ma; }   // +X: dir=(1,-uv.y,-uv.x)
+    else        { face=1; u =  d[2]/ma; v = -d[1]/ma; }   // -X: dir=(-1,-uv.y,uv.x)
+  } else if(ay >= ax && ay >= az){
+    ma = ay;
+    if(d[1] > 0){ face=2; u =  d[0]/ma; v =  d[2]/ma; }   // +Y: dir=(uv.x,1,uv.y)
+    else        { face=3; u =  d[0]/ma; v = -d[2]/ma; }   // -Y: dir=(uv.x,-1,-uv.y)
+  } else {
+    ma = az;
+    if(d[2] > 0){ face=4; u =  d[0]/ma; v = -d[1]/ma; }   // +Z: dir=(uv.x,-uv.y,1)
+    else        { face=5; u = -d[0]/ma; v = -d[1]/ma; }   // -Z: dir=(-uv.x,-uv.y,-1)
+  }
+  return { face, u, v };
+}
+
+function setDirPreset(azDeg, elDeg){
+  s2.az = azDeg*Math.PI/180;
+  s2.el = elDeg*Math.PI/180;
+  const ra = document.getElementById('r2az'), re = document.getElementById('r2el');
+  if(ra) ra.value = azDeg;
+  if(re) re.value = elDeg;
+  setTxt('v2az', azDeg+'°');
+  setTxt('v2el', elDeg+'°');
+}
+
+function drawS2(){
+  if(!ctx2) return;
+  const cw=W(c2), ch=H(c2);
+  ctx2.clearRect(0,0,cw,ch);
+
+  const cols=4, rows=3, pad=12;
+  const cell = Math.min((cw-pad*2)/cols, (ch-pad*2)/rows);
+  const ox = (cw-cell*cols)/2, oy = (ch-cell*rows)/2;
+
+  const dir = dirFromAzEl(s2.az, s2.el);
+  const {face,u,v} = dirToFaceUV(dir);
+
+  for(let f=0; f<6; f++){
+    const [col,row] = FACE_GRID[f];
+    const x = ox+col*cell, y = oy+row*cell;
+    const active = (f===face);
+    ctx2.fillStyle = active ? 'rgba(88,166,255,0.16)' : 'rgba(255,255,255,0.025)';
+    ctx2.fillRect(x,y,cell,cell);
+    ctx2.lineWidth = active ? 2 : 1;
+    ctx2.strokeStyle = active ? COL_ACCENT : COL_BORDER;
+    ctx2.strokeRect(x+1,y+1,cell-2,cell-2);
+    ctx2.fillStyle = active ? COL_ACCENT : COL_TEXT2;
+    ctx2.font = '12px sans-serif';
+    ctx2.textAlign = 'center'; ctx2.textBaseline = 'top';
+    ctx2.fillText(FACE_NAMES[f], x+cell/2, y+8);
+
+    if(active){
+      const mx = x + (u+1)/2*cell;
+      const my = y + (v+1)/2*cell;
+      ctx2.beginPath(); ctx2.arc(mx,my,6,0,Math.PI*2);
+      ctx2.fillStyle = COL_RED; ctx2.fill();
+      ctx2.lineWidth = 1.5; ctx2.strokeStyle = '#fff'; ctx2.stroke();
+    }
+  }
+
+  setTxt('s2dir',  `${dir[0].toFixed(2)}, ${dir[1].toFixed(2)}, ${dir[2].toFixed(2)}`);
+  setTxt('s2face', FACE_NAMES[face]);
+  setTxt('s2uv',   `${u.toFixed(2)}, ${v.toFixed(2)}`);
+
+  requestAnimationFrame(drawS2);
+}
+
 window.addEventListener('load', () => {
   ctx1 = initCanvas(c1);
+  ctx2 = initCanvas(c2);
 
   bind('r1t', 'v1t', v => fmtClock(+v), v => { s1.t = v; });
   const r1t = document.getElementById('r1t');
@@ -271,11 +399,16 @@ window.addEventListener('load', () => {
 
   bind('r1spd', 'v1spd', v => (+v).toFixed(1), v => { s1.spd = +v; });
 
+  bind('r2az', 'v2az', v => Math.round(+v)+'°', v => { s2.az = v*Math.PI/180; });
+  bind('r2el', 'v2el', v => Math.round(+v)+'°', v => { s2.el = v*Math.PI/180; });
+
   drawS1();
+  drawS2();
 });
 
 window.addEventListener('resize', () => {
   ctx1 = initCanvas(c1);
+  ctx2 = initCanvas(c2);
 });
 </script>
 </body>
