@@ -214,6 +214,9 @@
     <CustomBuild Include="shaders\SkyCaptureCS.hlsl">
       <Filter>Assets\Shaders</Filter>
     </CustomBuild>
+    <CustomBuild Include="shaders\BRDFLutCS.hlsl">
+      <Filter>Assets\Shaders</Filter>
+    </CustomBuild>
     <CustomBuild Include="shaders\ssao.hlsl">
       <Filter>Assets\Shaders</Filter>
     </CustomBuild>
