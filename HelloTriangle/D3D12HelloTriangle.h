@@ -86,7 +86,8 @@ private:
 
     float m_timeScale   = 1.0f;
     bool  m_timePaused  = false;
-    bool  m_autoExposure = true;
+    bool  m_autoExposure   = true;
+    bool  m_showIBLDebug   = false;  // toggle in "Post Process" panel
 
 
     int      m_jitterIndex   = 0;
