@@ -19,6 +19,7 @@
 
 void ShipModel::Init(
     ComPtr<ID3D12Device>  device,
+    IBLSystem*            ibl,
     ID3D12Resource*       heightMap,
     const std::string&    gltfDir,
     const UINT8* vsData,       UINT vsLen,
@@ -26,6 +27,7 @@ void ShipModel::Init(
     const UINT8* shadowVsData, UINT shadowVsLen)
 {
     m_device    = device;
+    m_ibl       = ibl;
     m_heightMap = heightMap;
     m_gltfDir   = gltfDir;
     m_srvIncr   = device->GetDescriptorHandleIncrementSize(
@@ -55,12 +57,14 @@ void ShipModel::Init(
         m_shadowCB->Map(0, &r, reinterpret_cast<void**>(&m_mappedShadowCB));
     }
 
-    // Main root signature: [0]=CBV(b0 ShipCB), [1]=Table(4 SRVs: t0..t3), [2]=CBV(b1 SHCB)
+    // Main root signature: [0]=CBV(b0 ShipCB), [1]=Table(6 SRVs: t0..t5), [2]=CBV(b1 SHCB)
+    // t0-t3: PBR textures (diffuse/normal/arm/heightmap)
+    // t4: TextureCube prefiltered specular (IBL), t5: Texture2D BRDF LUT (IBL)
     {
         CD3DX12_ROOT_PARAMETER params[3];
         params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
         CD3DX12_DESCRIPTOR_RANGE srvRange;
-        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0);
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 6, 0);  // 6 SRVs: t0..t5
         params[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
         params[2].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_PIXEL);
         CD3DX12_STATIC_SAMPLER_DESC sampler(0,
@@ -422,11 +426,11 @@ void ShipModel::InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
         if (!m_armPaths[g].empty())
             LoadTexture(grp.armTex, grp.armUpload, m_armPaths[g], cmdList);
 
-        // SRV heap: [0]=diffuse, [1]=normalMap, [2]=arm, [3]=heightmap
+        // SRV heap: [0]=diffuse, [1]=normalMap, [2]=arm, [3]=heightmap, [4]=prefilter, [5]=brdfLUT
         {
             D3D12_DESCRIPTOR_HEAP_DESC hd = {};
             hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-            hd.NumDescriptors = 4;
+            hd.NumDescriptors = 6;
             hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
             ThrowIfFailed(m_device->CreateDescriptorHeap(&hd,
                 IID_PPV_ARGS(&grp.srvHeap)));
@@ -474,6 +478,18 @@ void ShipModel::InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
             sd.Texture2D.MipLevels     = 1;
             m_device->CreateShaderResourceView(m_heightMap, &sd, handle);
         }
+        handle.Offset(1, m_srvIncr);
+
+        // Slot 4: prefiltered specular cubemap (TextureCube SRV, from IBLSystem)
+        m_device->CopyDescriptorsSimple(1, handle,
+            m_ibl->GetPrefilterSRVCPU(),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        handle.Offset(1, m_srvIncr);
+
+        // Slot 5: BRDF integration LUT (Texture2D SRV, from IBLSystem)
+        m_device->CopyDescriptorsSimple(1, handle,
+            m_ibl->GetBRDFLutSRVCPU(),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
         m_cpuVerts[g].clear();
         m_cpuVerts[g].shrink_to_fit();

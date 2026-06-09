@@ -12,6 +12,7 @@
 #include <vector>
 #include "../DXSampleHelper.h"
 #include "renderer/RendererContext.h"
+#include "IBLSystem.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -28,6 +29,7 @@ public:
     //          ending with a backslash e.g. "E:\\Assets\\dutch_ship_large_02_1k.gltf\\"
     void Init(
         ComPtr<ID3D12Device>  device,
+        IBLSystem*            ibl,           // for CopyDescriptorsSimple into SRV heap slots 4,5
         ID3D12Resource*       heightMap,
         const std::string&    gltfDir,
         const UINT8* vsData,       UINT vsLen,
@@ -73,7 +75,7 @@ private:
         ComPtr<ID3D12Resource>       diffuseTex,  diffuseUpload;
         ComPtr<ID3D12Resource>       normalTex,   normalUpload;
         ComPtr<ID3D12Resource>       armTex,      armUpload;
-        ComPtr<ID3D12DescriptorHeap> srvHeap; // 4 slots: diff/norm/arm/heightmap
+        ComPtr<ID3D12DescriptorHeap> srvHeap; // 6 slots: diff/norm/arm/heightmap/prefilter/brdfLUT
     };
 
     struct alignas(256) ShipCB
@@ -101,6 +103,7 @@ private:
     static_assert(sizeof(ShadowCB) == 256);
 
     ComPtr<ID3D12Device>         m_device;
+    IBLSystem*                   m_ibl = nullptr;   // non-owning, for descriptor copy at init
     std::array<MeshGroup, 3>     m_groups;
     ComPtr<ID3D12Resource>       m_cb;
     ShipCB*                      m_mappedCB       = nullptr;

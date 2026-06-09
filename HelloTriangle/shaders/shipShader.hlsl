@@ -1,4 +1,4 @@
-// Ship model VS/PS (PBR: GGX Cook-Torrance + SH9 diffuse IBL ambient) + shadow depth VS.
+// Ship model VS/PS (PBR: GGX Cook-Torrance + SH9 diffuse + split-sum specular IBL) + shadow depth VS.
 // ShipVS samples the FFT heightmap to follow ocean surface.
 
 #include "SkyIBL.hlsli"
@@ -7,7 +7,11 @@ Texture2D    g_diffuse   : register(t0);
 Texture2D    g_normalMap : register(t1);
 Texture2D    g_arm       : register(t2);
 Texture2D    g_heightMap : register(t3);
+TextureCube  g_prefilter : register(t4);  // GGX prefiltered specular cubemap (IBL Phase C)
+Texture2D    g_brdfLUT   : register(t5);  // BRDF integration LUT (IBL Phase A)
 SamplerState g_sampler   : register(s0);
+
+static const uint PREFILTER_MIPS = 6;
 
 cbuffer ShipCB : register(b0)
 {
@@ -217,13 +221,17 @@ float4 ShipPS(VSOut i) : SV_Target
     float3 direct = (kd * albedo / PI + spec) * lightColor * lightIntensity * NdotL * cloudShad * 4.0;
 
     // Diffuse irradiance from SH9 convolution of the captured sky cubemap.
-    // Coefficients are pre-multiplied by cosine-lobe factors in IrradianceConvolveCS,
-    // so EvalSH is a pure polynomial of N.  Clamped to zero to avoid negative radiance
-    // from numerical noise in the SH basis at extreme angles.
+    // Coefficients are pre-multiplied by cosine-lobe factors in IrradianceConvolveCS.
     float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
     float3 diffAmb    = albedo * (1.0 - metal) * irradiance / PI * ao * cloudOcc;
-    float3 specAmb    = F0 * ao * irradiance * 0.15 * cloudOcc;
-    float3 ambient    = diffAmb + specAmb;
+
+    // Specular IBL via Karis split-sum (Phase C):
+    // prefiltered env at reflection direction (mip = roughness) × BRDF LUT(NdotV, roughness).
+    float3 R           = reflect(-V, N);
+    float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, rough * (PREFILTER_MIPS - 1)).rgb;
+    float2 envBRDF     = g_brdfLUT.Sample(g_sampler, float2(NdotV, rough)).rg;
+    float3 specAmb     = (F0 * envBRDF.x + envBRDF.y) * prefiltered * ao * cloudOcc;
+    float3 ambient     = diffAmb + specAmb;
 
     // Lightning: brief white flash illuminating the whole ship
     float3 lightning = albedo * lightningIntensity * float3(0.85, 0.90, 1.0) * 0.6;
