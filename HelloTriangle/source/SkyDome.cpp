@@ -281,7 +281,7 @@ void SkyDome::Render(RenderContext& ctx)
         float sunH = m_sunDir.y;
 
         // dayT: 0=night, 1=full day
-        float dayT = std::clamp((sunH + 0.15f) / 0.35f, 0.0f, 1.0f);
+        float dayT = std::clamp((sunH + 0.25f) / 0.45f, 0.0f, 1.0f);
         dayT = dayT * dayT * (3.0f - 2.0f * dayT); // smoothstep
 
         // sunsetT: 1 at horizon, 0 when sun is high or deep below
@@ -364,8 +364,8 @@ float SkyDome::GetSunIntensity() const
 {
     // m_sunDir.y is the vertical component of the sun direction.
     // Noon: y≈1 (brightest), sunset: y≈0 (horizon), night: y<0 (off).
-    // Adding 0.1 provides a slight afterglow after sunset.
-    float baseIntensity = saturate(m_sunDir.y + 0.1f);
+    // +0.20 extends the afterglow to h=-0.20, matching the wider ComputeDayBlend window.
+    float baseIntensity = saturate(m_sunDir.y + 0.20f);
     // During storms sun intensity drops to 20%.
     return baseIntensity * (1.0f - m_weatherIntensity * 0.8f);
 }
@@ -375,9 +375,9 @@ XMFLOAT3 SkyDome::GetSunColor() const
     float h = m_sunDir.y; // -1 to 1
 
     // Sunset leans toward orange-red, noon leans toward white.
-    // Map [-0.1, 0.7] -> [0, 1] so the golden tint starts at mid-afternoon (h=0.5)
-    // rather than only near the horizon; smoothstep for a gradual perceptual curve.
-    float t = saturate((h + 0.1f) / 0.8f);
+    // Map [-0.25, 0.70] -> [0, 1]: golden tint starts at mid-afternoon, and the orange
+    // color persists below the horizon (h=-0.25) to match the extended afterglow window.
+    float t = saturate((h + 0.25f) / 0.95f);
     t = t * t * (3.0f - 2.0f * t);
     XMFLOAT3 sunsetColor = { 1.0f, 0.4f, 0.1f }; // sunset orange-red
     XMFLOAT3 noonColor = { 1.0f, 0.95f, 0.8f }; // warm white at noon
@@ -396,11 +396,12 @@ XMFLOAT3 SkyDome::GetSunColor() const
 }
 
 // dayBlend: 0 when sun is fully below horizon (moon is active light),
-// 1 when fully risen (sun is active light). Transition over [-0.15, +0.15]
-// with smoothstep to avoid a sharp jump between moon-lit and sun-lit direct light.
+// 1 when fully risen (sun is active light). Transition over [-0.25, +0.20]
+// with smoothstep. The wider window extends the twilight afterglow so the
+// sunset orange doesn't snap to moonlight blue within half a second.
 float SkyDome::ComputeDayBlend() const
 {
-    float t = std::clamp((m_sunDir.y + 0.15f) / 0.30f, 0.0f, 1.0f);
+    float t = std::clamp((m_sunDir.y + 0.25f) / 0.45f, 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t); // smoothstep
 }
 
