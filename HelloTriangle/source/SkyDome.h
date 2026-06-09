@@ -43,6 +43,20 @@ public:
     XMFLOAT3 GetMoonDirection()   const { return m_moonDir; }
     float    GetMoonIntensity()   const { return 0.15f; }
     XMFLOAT3 GetMoonColor()       const { return XMFLOAT3(0.6f, 0.7f, 1.0f); }
+
+    // ---- Unified single light source (sun/moon blended by sun elevation) ----
+    // All directly-lit surfaces (ocean, ship, floating objects, fish, ...) should pull
+    // their light from these three getters instead of combining GetSun*/GetMoon*
+    // themselves. A single shared blend keeps every surface in sync and prevents two
+    // simultaneously-active lights from opposite directions (sun + moon) from producing
+    // conflicting highlights at dusk/dawn — see the ship PBR fix for the symptom this
+    // caused (moonlight leaking onto the sunlit side of the hull at full daylight,
+    // because GetMoonIntensity() never faded with the moon's elevation).
+    // Effects that are inherently sun-only (rainbow, lens flare, god rays, weather
+    // state) should keep reading GetSunDirection/Intensity/Color directly.
+    XMFLOAT3 GetActiveLightDirection() const;
+    XMFLOAT3 GetActiveLightColor()     const;
+    float    GetActiveLightIntensity() const;
     // Setters for weather system
     void SetCloudParams(float density, float scale, float sharpness)
     {
@@ -57,6 +71,24 @@ public:
 
     float GetLightningIntensity() const { return m_lightningIntensity; }
 
+    // Snapshot of all fields IBLSystem needs to populate CaptureCB.
+    // Mirrors the gradient computation inside UpdateCB so both stay in sync.
+    struct CaptureState
+    {
+        XMFLOAT3 topColor, middleColor, bottomColor;
+        XMFLOAT3 sunPosition;
+        float    time;
+        XMFLOAT3 sunColor;
+        float    lightningIntensity;
+        XMFLOAT3 moonPosition;
+        float    cameraY;
+        XMFLOAT3 moonCrescentDir;
+        float    moonBodyPow;
+        float    moonOccludePow;
+        float    crescentOffsetAmt;
+    };
+    CaptureState GetCaptureState() const;
+
     // Moon parameters (read/write by ImGui)
     float GetCrescentRotSpeed()  const { return m_crescentRotSpeed; }
     float GetMoonBodyPow()       const { return m_moonBodyPow; }
@@ -69,6 +101,11 @@ public:
 
 
 private:
+    // Day/night blend factor: 0 = sun fully below horizon (moon active), 1 = sun fully
+    // risen (sun active); smoothly transitions over sunDir.y in [-0.1, 0.1].
+    // Shared by all three GetActiveLight*() getters so they always agree.
+    float ComputeDayBlend() const;
+
     void CreateSphereMesh(ComPtr<ID3D12GraphicsCommandList> cmdList);
     void CreateSkyPSO(const UINT8* vsData, UINT vsSize,
         const UINT8* psData, UINT psSize);

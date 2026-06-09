@@ -392,6 +392,39 @@ XMFLOAT3 SkyDome::GetSunColor() const
         baseColor.z + (stormColor.z - baseColor.z) * m_weatherIntensity);
 }
 
+// dayBlend: 0 when the sun is fully below the horizon (moon is the active light),
+// 1 when fully risen (sun is the active light). Smooth transition over [-0.1, 0.1],
+// matching the band SkyDome::Update() uses to fade the moon in/out (m_moonDir).
+float SkyDome::ComputeDayBlend() const
+{
+    return std::clamp((m_sunDir.y + 0.1f) / 0.2f, 0.0f, 1.0f);
+}
+
+XMFLOAT3 SkyDome::GetActiveLightDirection() const
+{
+    float t = ComputeDayBlend();
+    return XMFLOAT3(
+        std::lerp(m_moonDir.x, m_sunDir.x, t),
+        std::lerp(m_moonDir.y, m_sunDir.y, t),
+        std::lerp(m_moonDir.z, m_sunDir.z, t));
+}
+
+XMFLOAT3 SkyDome::GetActiveLightColor() const
+{
+    float t = ComputeDayBlend();
+    XMFLOAT3 sunCol  = GetSunColor();
+    XMFLOAT3 moonCol = GetMoonColor();
+    return XMFLOAT3(
+        std::lerp(moonCol.x, sunCol.x, t),
+        std::lerp(moonCol.y, sunCol.y, t),
+        std::lerp(moonCol.z, sunCol.z, t));
+}
+
+float SkyDome::GetActiveLightIntensity() const
+{
+    return std::lerp(GetMoonIntensity(), GetSunIntensity(), ComputeDayBlend());
+}
+
 // Primary sky color: transitions from night blue to daytime blue based on sun elevation.
 XMFLOAT3 SkyDome::GetSkyColor() const
 {
@@ -407,4 +440,54 @@ XMFLOAT3 SkyDome::GetSkyColor() const
         nightColor.y + (dayColor.y - nightColor.y) * h,
         nightColor.z + (dayColor.z - nightColor.z) * h
     );
+}
+
+// Mirrors the gradient computation inside UpdateCB so IBLSystem always gets
+// the same sky colors the rasterized dome uses.
+SkyDome::CaptureState SkyDome::GetCaptureState() const
+{
+    float sunH    = m_sunDir.y;
+    float dayT    = std::clamp((sunH + 0.15f) / 0.35f, 0.0f, 1.0f);
+    dayT          = dayT * dayT * (3.0f - 2.0f * dayT);
+    float sunsetT = std::clamp(1.0f - fabsf(sunH) / 0.22f, 0.0f, 1.0f);
+    sunsetT       = sunsetT * sunsetT;
+
+    float topN[3] = { 0.01f, 0.01f, 0.06f };
+    float midN[3] = { 0.02f, 0.02f, 0.09f };
+    float botN[3] = { 0.03f, 0.03f, 0.12f };
+    float topS[3] = { 0.10f, 0.16f, 0.48f };
+    float midS[3] = { 0.95f, 0.40f, 0.08f };
+    float botS[3] = { 1.60f, 0.72f, 0.12f };
+    float topD[3] = { 0.08f, 0.25f, 0.72f };
+    float midD[3] = { 0.38f, 0.62f, 1.05f };
+    float botD[3] = { 0.62f, 0.80f, 1.05f };
+
+    float top[3], mid[3], bot[3];
+    for (int i = 0; i < 3; i++)
+    {
+        float baseTop = topN[i] + (topD[i] - topN[i]) * dayT;
+        float baseMid = midN[i] + (midD[i] - midN[i]) * dayT;
+        float baseBot = botN[i] + (botD[i] - botN[i]) * dayT;
+        top[i] = baseTop + (topS[i] - baseTop) * sunsetT * 0.65f;
+        mid[i] = baseMid + (midS[i] - baseMid) * sunsetT;
+        bot[i] = baseBot + (botS[i] - baseBot) * sunsetT;
+    }
+
+    XMFLOAT3 sc = GetSunColor();
+
+    CaptureState s;
+    s.topColor         = { top[0], top[1], top[2] };
+    s.middleColor      = { mid[0], mid[1], mid[2] };
+    s.bottomColor      = { bot[0], bot[1], bot[2] };
+    s.sunPosition      = m_sunDir;
+    s.time             = m_time;
+    s.sunColor         = sc;
+    s.lightningIntensity = m_lightningIntensity;
+    s.moonPosition     = m_moonDir;
+    s.cameraY          = m_cameraY;
+    s.moonCrescentDir  = m_crescentDir;
+    s.moonBodyPow      = m_moonBodyPow;
+    s.moonOccludePow   = m_moonOccludePow;
+    s.crescentOffsetAmt= m_crescentOffsetAmt;
+    return s;
 }
