@@ -69,6 +69,7 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <button class="nav-btn" onclick="navTo('s6',this)">⑥ SH 畳み込み</button>
   <button class="nav-btn" onclick="navTo('s7',this)">⑦ 読み返しレイテンシ</button>
   <button class="nav-btn" onclick="navTo('s8',this)">⑧ 全面EvalSH展開</button>
+  <button class="nav-btn" onclick="navTo('s9',this)">⑨ 事前フィルタCS</button>
 </nav>
 
 <!-- ══════════════ S1: 为什么程序化天空能跳过 cubemap 光栅化 ══════════════ -->
@@ -412,6 +413,56 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
     ReadbackSH() → memcpy → SHCB UPLOAD 永続マップ<br>
     &nbsp;&nbsp;↓ 全サーフェス SetGraphicsRootConstantBufferView<br>
     EvalSH(N, shCoeffs) / PI → 物理ベース拡散アンビエント
+  </div>
+</section>
+
+<!-- ─── Section 9: Phase C — PrefilterSpecularCS ─────────────────────────── -->
+<section class="section" id="s9">
+  <h2>⑨ 事前フィルタ CS — GGX split-sum スペキュラ IBL (Phase C)</h2>
+  <p>Phase B の拡散アンビエントに続き、Phase C では <strong>間接スペキュラ光</strong>を物理的に正しく扱う。
+  GGX NDF の重要度サンプリングで天空輝度をミップごとに畳み込んだ
+  <em>事前フィルタキューブマップ</em>と、Phase A で生成した BRDF 積分 LUT を組み合わせる
+  <em>Karis split-sum 近似</em>がその中核。</p>
+
+  <h3>split-sum 近似とは</h3>
+  <p>完全なスペキュラ IBL 積分は下記の 2 重積分：</p>
+  <div class="formula">
+    L<sub>spec</sub> = ∫ f(l,v) L<sub>i</sub>(l) (N·l) dl
+  </div>
+  <p>これを「事前フィルタ環境」と「BRDF 積分」の <strong>積</strong> に分離する（Karis 2013）：</p>
+  <div class="formula">
+    ≈ ∫ L<sub>i</sub>(R) D·G dΩ &nbsp;×&nbsp; ∫ f(l,v)(N·l) dl<br>
+    &nbsp;= <b>g_prefilter.SampleLevel(R, roughness×maxMip)</b> × <b>(F0·envBRDF.x + envBRDF.y)</b>
+  </div>
+
+  <h3>ミップ = 粗さ マッピング</h3>
+  <canvas id="c9" width="700" height="200" style="width:100%;border-radius:8px;display:block;margin:16px 0"></canvas>
+  <div style="text-align:center;margin-bottom:8px">
+    <label>粗さ (roughness): <input type="range" id="r9rough" min="0" max="1" step="0.01" value="0.5" style="width:200px">
+    <span id="v9rough">0.50</span></label>
+  </div>
+
+  <h3>Hammersley 列と GGX 重要度サンプリング</h3>
+  <div class="formula">
+    <em>// Van der Corput 基数逆変換 → 低食い違い量列</em><br>
+    <b>float2</b> Hammersley(uint i, uint N) { <b>return</b> float2(i/N, RadicalInverse(i)); }<br><br>
+    <em>// GGX NDF から半ベクトル H を生成</em><br>
+    cosθ = sqrt((1-Xi.y) / (1 + (a²-1)·Xi.y))<br>
+    H = TBN × (sinθ·cosφ, sinθ·sinφ, cosθ)&nbsp;&nbsp;<em>// 接線空間→ワールド空間</em><br>
+    L = 2·(N·H)·H - N&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<em>// 反射方向</em>
+  </div>
+
+  <h3>DispatchPrefilter の遷移フロー</h3>
+  <div class="formula">
+    m_captureCubemap&nbsp;&nbsp;&nbsp;: UAV → NON_PIXEL_SRV<br>
+    m_prefilterCubemap : [2回目以降] PSR → UAV<br>
+    for mip in 0..5:<br>
+    &nbsp;&nbsp;SetComputeRootDescriptorTable(1, uavSlot[mip])<br>
+    &nbsp;&nbsp;SetComputeRoot32BitConstants(roughness, invFaceSize, 512, 0)<br>
+    &nbsp;&nbsp;Dispatch( ceil(64&gt;&gt;mip / 8), ceil(64&gt;&gt;mip / 8), 6 )<br>
+    &nbsp;&nbsp;UAV barrier<br>
+    m_prefilterCubemap : UAV → PIXEL_SRV | NON_PIXEL_SRV<br>
+    m_captureCubemap&nbsp;&nbsp;&nbsp;: NON_PIXEL_SRV → UAV
   </div>
 </section>
 
@@ -1184,6 +1235,11 @@ window.addEventListener('load', () => {
   const c8 = document.getElementById('c8');
   let ctx8 = initCanvas(c8);
   drawS8();
+
+  const c9 = document.getElementById('c9');
+  let ctx9 = initCanvas(c9);
+  bind('r9rough', 'v9rough', v => (+v).toFixed(2), v => { s9Rough = +v; drawS9(); });
+  drawS9();
 });
 
 // ─── Section 8: EvalSH rollout matrix ────────────────────────────────────────
@@ -1251,6 +1307,82 @@ function drawS8() {
   ctx8.fillText('全4サーフェスが SkyIBL.hlsli 経由で同一 EvalSH を呼び出す', W / 2, H - 6);
 }
 
+// ─── Section 9: prefilter mip visualisation ──────────────────────────────────
+let s9Rough = 0.5;
+
+function drawS9() {
+  const c9 = document.getElementById('c9');
+  const ctx9 = initCanvas(c9);
+  const W = c9.width, H = c9.height;
+  const MIPS = 6;
+  const mipW = (W - 20) / MIPS;
+  const faceBase = 64;
+
+  ctx9.clearRect(0, 0, W, H);
+
+  for (let mip = 0; mip < MIPS; mip++) {
+    const rough = mip / (MIPS - 1);
+    const x = 10 + mip * mipW;
+    const faceSize = faceBase >> mip;
+    const boxH = H - 60;
+
+    // Background box with blur-simulating gradient
+    const grd = ctx9.createRadialGradient(x + mipW/2, 40, 4, x + mipW/2, 40, mipW/2 + 10);
+    // Sun-like highlight at roughness=0, progressively blurred
+    const sharpness = 1.0 - rough;
+    grd.addColorStop(0,   `rgba(255,230,160,${0.3 + sharpness * 0.7})`);
+    grd.addColorStop(0.3 + rough * 0.5, `rgba(100,160,220,${0.4 + rough * 0.2})`);
+    grd.addColorStop(1,   'rgba(30,50,80,0.9)');
+    ctx9.fillStyle = grd;
+    ctx9.beginPath();
+    ctx9.roundRect(x+2, 10, mipW - 4, boxH, 6);
+    ctx9.fill();
+
+    // Blur overlay: stronger at higher roughness
+    if (rough > 0) {
+      ctx9.fillStyle = `rgba(80,120,180,${rough * 0.25})`;
+      ctx9.beginPath();
+      ctx9.roundRect(x+2, 10, mipW - 4, boxH, 6);
+      ctx9.fill();
+    }
+
+    // Active roughness indicator
+    const activeMip = Math.round(s9Rough * (MIPS - 1));
+    if (mip === activeMip) {
+      ctx9.strokeStyle = '#5b9bd5';
+      ctx9.lineWidth = 3;
+      ctx9.beginPath();
+      ctx9.roundRect(x+2, 10, mipW - 4, boxH, 6);
+      ctx9.stroke();
+    }
+
+    // Mip label
+    ctx9.fillStyle = '#fff';
+    ctx9.font = 'bold 12px monospace';
+    ctx9.textAlign = 'center';
+    ctx9.fillText(`mip ${mip}`, x + mipW/2, boxH + 4);
+    ctx9.fillStyle = '#aaa';
+    ctx9.font = '11px monospace';
+    ctx9.fillText(`r=${rough.toFixed(2)}`, x + mipW/2, boxH + 18);
+    ctx9.fillText(`${faceSize}px`, x + mipW/2, boxH + 30);
+  }
+
+  // Roughness arrow
+  const activeMip = s9Rough * (MIPS - 1);
+  const arrowX = 10 + activeMip * mipW + mipW / 2;
+  ctx9.fillStyle = '#5b9bd5';
+  ctx9.beginPath();
+  ctx9.moveTo(arrowX, H - 8);
+  ctx9.lineTo(arrowX - 6, H - 18);
+  ctx9.lineTo(arrowX + 6, H - 18);
+  ctx9.closePath();
+  ctx9.fill();
+  ctx9.fillStyle = '#5b9bd5';
+  ctx9.font = 'bold 11px sans-serif';
+  ctx9.textAlign = 'center';
+  ctx9.fillText(`roughness = ${s9Rough.toFixed(2)}`, arrowX, H - 1);
+}
+
 window.addEventListener('resize', () => {
   ctx1 = initCanvas(c1);
   ctx2 = initCanvas(c2);
@@ -1264,6 +1396,7 @@ window.addEventListener('resize', () => {
   drawS6();
   drawS7();
   drawS8();
+  drawS9();
 });
 </script>
 </body>

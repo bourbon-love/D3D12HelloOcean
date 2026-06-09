@@ -42,9 +42,10 @@ void IBLSystem::Init(
     ComPtr<ID3D12CommandQueue> cmdQueue,
     UINT cubemapFaceSize,
     UINT brdfLutSize,
-    const UINT8* captureCSData, UINT captureCSSize,
-    const UINT8* brdfLutCSData, UINT brdfLutCSSize,
-    const UINT8* irradCSData,   UINT irradCSSize)
+    const UINT8* captureCSData,   UINT captureCSSize,
+    const UINT8* brdfLutCSData,   UINT brdfLutCSSize,
+    const UINT8* irradCSData,     UINT irradCSSize,
+    const UINT8* prefilterCSData, UINT prefilterCSSize)
 {
     m_device   = device;
     m_faceSize = cubemapFaceSize;
@@ -57,6 +58,7 @@ void IBLSystem::Init(
     CreateConstantBuffers();
     RunBRDFLutOnce(cmdQueue);
     CreateSHResources(irradCSData, irradCSSize);
+    CreatePrefilterResources(prefilterCSData, prefilterCSSize);
 }
 
 // -----------------------------------------------
@@ -97,6 +99,24 @@ void IBLSystem::CreateTextures(UINT cubemapFaceSize, UINT brdfLutSize)
             &heapProp, D3D12_HEAP_FLAG_NONE, &desc,
             D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
             IID_PPV_ARGS(&m_brdfLut)));
+    }
+
+    // Prefiltered specular cubemap (Phase C): RGBA16F, 6 faces, PREFILTER_MIPS mip levels.
+    // Starts in UAV state; DispatchPrefilter transitions to PIXEL_SHADER_RESOURCE when done.
+    {
+        D3D12_RESOURCE_DESC desc = {};
+        desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        desc.Width            = cubemapFaceSize;       // 64
+        desc.Height           = cubemapFaceSize;
+        desc.DepthOrArraySize = 6;
+        desc.MipLevels        = PREFILTER_MIPS;        // 6 (64→2)
+        desc.Format           = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        desc.SampleDesc.Count = 1;
+        desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &desc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&m_prefilterCubemap)));
     }
 }
 
@@ -150,11 +170,13 @@ void IBLSystem::CreateDescriptorHeaps()
             m_lutUAVHeap->GetCPUDescriptorHandleForHeapStart());
     }
 
-    // m_debugSRVHeap: 2 slots — TEXTURECUBE SRV (slot 0) + TEXTURE2D SRV (slot 1).
-    // Used by ImGui's debug preview (Task 7) to display the captured cubemap and LUT.
+    // m_debugSRVHeap: 3 slots —
+    //   slot 0: TextureCube SRV for captured environment cubemap (ImGui preview)
+    //   slot 1: Texture2D SRV for BRDF LUT  (ImGui preview + exposed via GetBRDFLutSRVCPU)
+    //   slot 2: TextureCube SRV for prefiltered specular cubemap (exposed via GetPrefilterSRVCPU)
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
-        heapDesc.NumDescriptors = 2;
+        heapDesc.NumDescriptors = 3;
         heapDesc.Type  = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_device->CreateDescriptorHeap(
@@ -162,7 +184,7 @@ void IBLSystem::CreateDescriptorHeaps()
 
         auto cpu = m_debugSRVHeap->GetCPUDescriptorHandleForHeapStart();
 
-        // Slot 0: TEXTURECUBE SRV for the captured environment cubemap
+        // Slot 0: TextureCube SRV for the captured environment cubemap
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
             srvDesc.Format                      = DXGI_FORMAT_R16G16B16A16_FLOAT;
@@ -174,7 +196,7 @@ void IBLSystem::CreateDescriptorHeaps()
             cpu.ptr += descSize;
         }
 
-        // Slot 1: TEXTURE2D SRV for the BRDF LUT
+        // Slot 1: Texture2D SRV for the BRDF LUT
         {
             D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
             srvDesc.Format                    = DXGI_FORMAT_R16G16_FLOAT;
@@ -183,8 +205,41 @@ void IBLSystem::CreateDescriptorHeaps()
             srvDesc.Texture2D.MipLevels       = 1;
             srvDesc.Texture2D.MostDetailedMip = 0;
             m_device->CreateShaderResourceView(m_brdfLut.Get(), &srvDesc, cpu);
+            cpu.ptr += descSize;
+        }
+
+        // Slot 2: TextureCube SRV for prefiltered specular cubemap (all PREFILTER_MIPS mip levels).
+        // Surface shaders copy this handle into their own heap via CopyDescriptorsSimple.
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format                          = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            srvDesc.ViewDimension                   = D3D12_SRV_DIMENSION_TEXTURECUBE;
+            srvDesc.Shader4ComponentMapping         = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.TextureCube.MipLevels           = PREFILTER_MIPS;
+            srvDesc.TextureCube.MostDetailedMip     = 0;
+            srvDesc.TextureCube.ResourceMinLODClamp = 0.0f;
+            m_device->CreateShaderResourceView(m_prefilterCubemap.Get(), &srvDesc, cpu);
         }
     }
+}
+
+// -----------------------------------------------
+D3D12_CPU_DESCRIPTOR_HANDLE IBLSystem::GetPrefilterSRVCPU() const
+{
+    UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    auto h = m_debugSRVHeap->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += 2 * descSize;  // slot 2
+    return h;
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE IBLSystem::GetBRDFLutSRVCPU() const
+{
+    UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    auto h = m_debugSRVHeap->GetCPUDescriptorHandleForHeapStart();
+    h.ptr += 1 * descSize;  // slot 1
+    return h;
 }
 
 // -----------------------------------------------
@@ -373,7 +428,10 @@ void IBLSystem::Dispatch(
     // Convolve every 30 frames, but only after the first full 6-face cycle completes.
     // Fires at frames 6, 36, 66, ... (m_shFrameCount % 30 == 6).
     if (m_shFrameCount >= 6 && m_shFrameCount % 30 == 6)
+    {
         DispatchIrradiance(cmdList);
+        DispatchPrefilter(cmdList);
+    }
 }
 
 // -----------------------------------------------
@@ -547,4 +605,176 @@ void IBLSystem::ReadbackSH()
     // GPU has finished (WaitForPreviousFrame was called) — safe to read staging.
     memcpy(m_shCBMapped, m_shStagingMapped, 9 * sizeof(XMFLOAT4));
     m_shStagingReady = false;
+}
+
+// -----------------------------------------------
+// Phase C — GGX prefiltered specular cubemap
+// -----------------------------------------------
+void IBLSystem::CreatePrefilterResources(const UINT8* prefilterCSData, UINT prefilterCSSize)
+{
+    UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // m_prefilterHeap: slot0 = TextureCube SRV of capture cubemap (input to PrefilterSpecularCS),
+    //                  slots 1..PREFILTER_MIPS = Texture2DArray UAV, one per mip of m_prefilterCubemap.
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+        heapDesc.NumDescriptors = 1 + PREFILTER_MIPS;  // 7 slots total
+        heapDesc.Type  = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ThrowIfFailed(m_device->CreateDescriptorHeap(
+            &heapDesc, IID_PPV_ARGS(&m_prefilterHeap)));
+
+        auto cpu = m_prefilterHeap->GetCPUDescriptorHandleForHeapStart();
+
+        // Slot 0: TextureCube SRV — captured sky cubemap (mip 0 only, for sampling in CS)
+        {
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format                      = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            srvDesc.ViewDimension               = D3D12_SRV_DIMENSION_TEXTURECUBE;
+            srvDesc.Shader4ComponentMapping     = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.TextureCube.MipLevels       = 1;
+            srvDesc.TextureCube.MostDetailedMip = 0;
+            m_device->CreateShaderResourceView(m_captureCubemap.Get(), &srvDesc, cpu);
+            cpu.ptr += descSize;
+        }
+
+        // Slots 1..PREFILTER_MIPS: Texture2DArray UAV — one per output mip of m_prefilterCubemap.
+        for (UINT mip = 0; mip < PREFILTER_MIPS; ++mip)
+        {
+            D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+            uavDesc.Format                         = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            uavDesc.ViewDimension                  = D3D12_UAV_DIMENSION_TEXTURE2DARRAY;
+            uavDesc.Texture2DArray.MipSlice        = mip;
+            uavDesc.Texture2DArray.FirstArraySlice = 0;
+            uavDesc.Texture2DArray.ArraySize       = 6;
+            m_device->CreateUnorderedAccessView(
+                m_prefilterCubemap.Get(), nullptr, &uavDesc, cpu);
+            cpu.ptr += descSize;
+        }
+    }
+
+    // Root signature: [0]=Table(1 SRV: t0), [1]=Table(1 UAV: u0), [2]=Constants(4, b0).
+    // Static sampler s0: linear-clamp for cubemap sampling.
+    {
+        CD3DX12_DESCRIPTOR_RANGE1 srvRange, uavRange;
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+        uavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+
+        CD3DX12_ROOT_PARAMETER1 params[3];
+        params[0].InitAsDescriptorTable(1, &srvRange);
+        params[1].InitAsDescriptorTable(1, &uavRange);
+        params[2].InitAsConstants(4, 0);  // roughness, invFaceSize, numSamples, pad
+
+        D3D12_STATIC_SAMPLER_DESC sampler = {};
+        sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+        sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_CLAMP;
+        sampler.MipLODBias       = 0.0f;
+        sampler.MaxAnisotropy    = 1;
+        sampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_NEVER;
+        sampler.BorderColor      = D3D12_STATIC_BORDER_COLOR_TRANSPARENT_BLACK;
+        sampler.MinLOD           = 0.0f;
+        sampler.MaxLOD           = D3D12_FLOAT32_MAX;
+        sampler.ShaderRegister   = 0;
+        sampler.RegisterSpace    = 0;
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
+
+        CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC desc;
+        desc.Init_1_1(3, params, 1, &sampler);
+
+        ComPtr<ID3DBlob> sig, err;
+        ThrowIfFailed(D3DX12SerializeVersionedRootSignature(
+            &desc, D3D_ROOT_SIGNATURE_VERSION_1_1, &sig, &err));
+        ThrowIfFailed(m_device->CreateRootSignature(
+            0, sig->GetBufferPointer(), sig->GetBufferSize(),
+            IID_PPV_ARGS(&m_prefilterRootSig)));
+    }
+
+    // PSO for PrefilterSpecularCS.
+    {
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+        psoDesc.pRootSignature = m_prefilterRootSig.Get();
+        psoDesc.CS = CD3DX12_SHADER_BYTECODE(prefilterCSData, prefilterCSSize);
+        ThrowIfFailed(m_device->CreateComputePipelineState(
+            &psoDesc, IID_PPV_ARGS(&m_prefilterPSO)));
+    }
+}
+
+// -----------------------------------------------
+void IBLSystem::DispatchPrefilter(ComPtr<ID3D12GraphicsCommandList> cmdList)
+{
+    UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // Capture cubemap: UAV → NON_PIXEL_SHADER_RESOURCE so the CS TextureCube SRV can sample it.
+    auto captureToSRV = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_captureCubemap.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    cmdList->ResourceBarrier(1, &captureToSRV);
+
+    // Prefilter cubemap: on subsequent dispatches transition PSR → UAV for writing.
+    if (m_prefilterReady)
+    {
+        auto prefilterToUAV = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_prefilterCubemap.Get(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        cmdList->ResourceBarrier(1, &prefilterToUAV);
+    }
+    // First call: m_prefilterCubemap is already in UAV state from resource creation.
+
+    cmdList->SetComputeRootSignature(m_prefilterRootSig.Get());
+    cmdList->SetPipelineState(m_prefilterPSO.Get());
+
+    ID3D12DescriptorHeap* heaps[] = { m_prefilterHeap.Get() };
+    cmdList->SetDescriptorHeaps(1, heaps);
+
+    // Slot 0: TextureCube SRV of captured cubemap (same for all mips)
+    cmdList->SetComputeRootDescriptorTable(
+        0, m_prefilterHeap->GetGPUDescriptorHandleForHeapStart());
+
+    for (UINT mip = 0; mip < PREFILTER_MIPS; ++mip)
+    {
+        UINT faceSize = m_faceSize >> mip;  // 64, 32, 16, 8, 4, 2
+
+        // Slot 1: UAV for current mip (slots 1..PREFILTER_MIPS)
+        D3D12_GPU_DESCRIPTOR_HANDLE uavHandle =
+            m_prefilterHeap->GetGPUDescriptorHandleForHeapStart();
+        uavHandle.ptr += static_cast<UINT64>(1 + mip) * descSize;
+        cmdList->SetComputeRootDescriptorTable(1, uavHandle);
+
+        // Root constants: roughness, invFaceSize, numSamples, pad
+        struct { float roughness; float invFaceSize; UINT numSamples; UINT pad; } pc;
+        pc.roughness   = (PREFILTER_MIPS > 1) ? (float)mip / (float)(PREFILTER_MIPS - 1) : 0.0f;
+        pc.invFaceSize = 1.0f / (float)faceSize;
+        pc.numSamples  = 512;
+        pc.pad         = 0;
+        cmdList->SetComputeRoot32BitConstants(2, 4, &pc, 0);
+
+        UINT groups = (faceSize + 7) / 8;
+        cmdList->Dispatch(groups, groups, 6);
+
+        // UAV barrier between mips so each mip write is visible before the next.
+        auto uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(m_prefilterCubemap.Get());
+        cmdList->ResourceBarrier(1, &uavBarrier);
+    }
+
+    // Transition prefilter cubemap to shader-readable state for surface pixel shaders.
+    auto prefilterToPSR = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_prefilterCubemap.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    cmdList->ResourceBarrier(1, &prefilterToPSR);
+
+    // Restore capture cubemap to UAV for the next sky capture dispatch.
+    auto captureToUAV = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_captureCubemap.Get(),
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    cmdList->ResourceBarrier(1, &captureToUAV);
+
+    m_prefilterReady = true;
 }
