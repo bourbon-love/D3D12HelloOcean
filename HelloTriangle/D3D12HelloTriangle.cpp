@@ -164,13 +164,14 @@ void D3D12HelloTriangle::LoadAssets()
     m_oceanFFT->Init(m_device, m_commandQueue, 256,
         pPhillips, phillipsLen, pTimeEvo, timeEvoLen, pIFFT, ifftLen);
 
-    UINT8 *pSkyCaptureCS = nullptr, *pBRDFLutCS = nullptr;
-    UINT   skyCaptureLen = 0, brdfLutLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"SkyCaptureCS.cso").c_str(), &pSkyCaptureCS, &skyCaptureLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"BRDFLutCS.cso").c_str(),   &pBRDFLutCS,    &brdfLutLen));
+    UINT8 *pSkyCaptureCS = nullptr, *pBRDFLutCS = nullptr, *pIrradCS = nullptr;
+    UINT   skyCaptureLen = 0, brdfLutLen = 0, irradLen = 0;
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"SkyCaptureCS.cso").c_str(),        &pSkyCaptureCS, &skyCaptureLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"BRDFLutCS.cso").c_str(),           &pBRDFLutCS,    &brdfLutLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"IrradianceConvolveCS.cso").c_str(),&pIrradCS,      &irradLen));
     m_iblSystem = std::make_unique<IBLSystem>();
     m_iblSystem->Init(m_device, m_commandQueue, 64, 128,
-        pSkyCaptureCS, skyCaptureLen, pBRDFLutCS, brdfLutLen);
+        pSkyCaptureCS, skyCaptureLen, pBRDFLutCS, brdfLutLen, pIrradCS, irradLen);
 
     // Create per-face SRVs (slots 1-6) and LUT SRV (slot 7) in the ImGui heap
     // so ImGui::Image() can display them in the debug preview window.
@@ -333,6 +334,10 @@ void D3D12HelloTriangle::LoadAssets()
 // ============================================================
 void D3D12HelloTriangle::OnUpdate()
 {
+    // Copy staged SH coefficients into SHCB — safe here because WaitForPreviousFrame()
+    // was called at the end of the previous OnRender, so GPU writes are complete.
+    m_iblSystem->ReadbackSH();
+
     auto currentTime = std::chrono::steady_clock::now();
     float deltaTime  = std::chrono::duration<float>(currentTime - m_lastTime).count();
     m_lastTime = currentTime;
@@ -920,7 +925,8 @@ void D3D12HelloTriangle::OnRender()
         m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
         m_skyDome->GetActiveLightColor(),     m_renderer->GetCameraPos(),
         m_skyDome->GetLightningIntensity(),
-        shipCloud);
+        shipCloud,
+        m_iblSystem->GetSHCB());
     // Restore ocean root signature and SRV heap after ship changes them
     m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
     {

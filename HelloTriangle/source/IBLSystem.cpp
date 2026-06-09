@@ -27,6 +27,15 @@ struct alignas(256) CaptureCB
 };
 static_assert(sizeof(CaptureCB) == 256, "CaptureCB must be exactly 256 bytes");
 
+// SH9 constant buffer — 9 float4 coefficients (144 bytes) + 7 float4 padding = 256 bytes.
+// Uploaded to GPU after each IrradianceConvolveCS dispatch; shaders bind via b1.
+struct alignas(256) SHCB
+{
+    DirectX::XMFLOAT4 shCoeffs[9];  // xyz=RGB SH coefficient, w unused
+    DirectX::XMFLOAT4 _pad[7];
+};
+static_assert(sizeof(SHCB) == 256, "SHCB must be exactly 256 bytes");
+
 // -----------------------------------------------
 void IBLSystem::Init(
     ComPtr<ID3D12Device>       device,
@@ -34,7 +43,8 @@ void IBLSystem::Init(
     UINT cubemapFaceSize,
     UINT brdfLutSize,
     const UINT8* captureCSData, UINT captureCSSize,
-    const UINT8* brdfLutCSData, UINT brdfLutCSSize)
+    const UINT8* brdfLutCSData, UINT brdfLutCSSize,
+    const UINT8* irradCSData,   UINT irradCSSize)
 {
     m_device   = device;
     m_faceSize = cubemapFaceSize;
@@ -46,6 +56,7 @@ void IBLSystem::Init(
     CreatePSOs(captureCSData, captureCSSize, brdfLutCSData, brdfLutCSSize);
     CreateConstantBuffers();
     RunBRDFLutOnce(cmdQueue);
+    CreateSHResources(irradCSData, irradCSSize);
 }
 
 // -----------------------------------------------
@@ -357,4 +368,183 @@ void IBLSystem::Dispatch(
 
     // Advance to the next face (rolling 6-frame cycle).
     m_currentFace = (m_currentFace + 1) % 6;
+    m_shFrameCount++;
+
+    // Convolve every 30 frames, but only after the first full 6-face cycle completes.
+    // Fires at frames 6, 36, 66, ... (m_shFrameCount % 30 == 6).
+    if (m_shFrameCount >= 6 && m_shFrameCount % 30 == 6)
+        DispatchIrradiance(cmdList);
+}
+
+// -----------------------------------------------
+void IBLSystem::CreateSHResources(const UINT8* irradCSData, UINT irradCSSize)
+{
+    UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // SH output buffer: RWBuffer<float4>[9] on DEFAULT heap, stays in UAV between convolves.
+    {
+        auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT);
+        auto bufDesc  = CD3DX12_RESOURCE_DESC::Buffer(
+            9 * sizeof(XMFLOAT4), D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS);
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+            IID_PPV_ARGS(&m_shOutputBuffer)));
+    }
+
+    // Staging (readback) buffer: same size as output, persistently mapped.
+    {
+        auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_READBACK);
+        auto bufDesc  = CD3DX12_RESOURCE_DESC::Buffer(9 * sizeof(XMFLOAT4));
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+            IID_PPV_ARGS(&m_shStagingBuffer)));
+        ThrowIfFailed(m_shStagingBuffer->Map(
+            0, nullptr, reinterpret_cast<void**>(&m_shStagingMapped)));
+    }
+
+    // SHCB upload buffer: 256 bytes, persistently mapped, zero-initialized so shaders
+    // get a valid (black) ambient before the first convolve fires at frame 6.
+    {
+        auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
+        auto bufDesc  = CD3DX12_RESOURCE_DESC::Buffer(256);
+        ThrowIfFailed(m_device->CreateCommittedResource(
+            &heapProp, D3D12_HEAP_FLAG_NONE, &bufDesc,
+            D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
+            IID_PPV_ARGS(&m_shCB)));
+        CD3DX12_RANGE readRange(0, 0);
+        ThrowIfFailed(m_shCB->Map(
+            0, &readRange, reinterpret_cast<void**>(&m_shCBMapped)));
+        memset(m_shCBMapped, 0, 256);
+    }
+
+    // Combined descriptor heap: slot 0 = Texture2DArray SRV (cubemap 6 faces),
+    // slot 1 = UAV (SH output buffer).  Both in one heap because DX12 allows
+    // only one CBV_SRV_UAV heap bound at a time.
+    {
+        D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
+        heapDesc.NumDescriptors = 2;
+        heapDesc.Type  = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
+        heapDesc.Flags = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
+        ThrowIfFailed(m_device->CreateDescriptorHeap(
+            &heapDesc, IID_PPV_ARGS(&m_shConvolveHeap)));
+
+        auto cpu = m_shConvolveHeap->GetCPUDescriptorHandleForHeapStart();
+
+        // Slot 0: Texture2DArray SRV — all 6 faces of the captured cubemap.
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Format                         = DXGI_FORMAT_R16G16B16A16_FLOAT;
+        srvDesc.ViewDimension                  = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+        srvDesc.Shader4ComponentMapping        = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Texture2DArray.MipLevels       = 1;
+        srvDesc.Texture2DArray.ArraySize       = 6;
+        srvDesc.Texture2DArray.FirstArraySlice = 0;
+        m_device->CreateShaderResourceView(m_captureCubemap.Get(), &srvDesc, cpu);
+        cpu.ptr += descSize;
+
+        // Slot 1: UAV — typed buffer RWBuffer<float4>[9].
+        D3D12_UNORDERED_ACCESS_VIEW_DESC uavDesc = {};
+        uavDesc.Format             = DXGI_FORMAT_R32G32B32A32_FLOAT;
+        uavDesc.ViewDimension      = D3D12_UAV_DIMENSION_BUFFER;
+        uavDesc.Buffer.NumElements = 9;
+        m_device->CreateUnorderedAccessView(
+            m_shOutputBuffer.Get(), nullptr, &uavDesc, cpu);
+    }
+
+    // Root signature: [0]=Table(1 SRV: t0), [1]=Table(1 UAV: u0).
+    // Both tables index into m_shConvolveHeap.
+    {
+        CD3DX12_DESCRIPTOR_RANGE1 srvRange, uavRange;
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
+        uavRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0);
+
+        CD3DX12_ROOT_PARAMETER1 params[2];
+        params[0].InitAsDescriptorTable(1, &srvRange);
+        params[1].InitAsDescriptorTable(1, &uavRange);
+
+        CD3DX12_VERSIONED_ROOT_SIGNATURE_DESC desc;
+        desc.Init_1_1(2, params);
+
+        ComPtr<ID3DBlob> sig, err;
+        ThrowIfFailed(D3DX12SerializeVersionedRootSignature(
+            &desc, D3D_ROOT_SIGNATURE_VERSION_1_1, &sig, &err));
+        ThrowIfFailed(m_device->CreateRootSignature(
+            0, sig->GetBufferPointer(), sig->GetBufferSize(),
+            IID_PPV_ARGS(&m_shConvolveRootSig)));
+    }
+
+    // PSO for IrradianceConvolveCS.
+    {
+        D3D12_COMPUTE_PIPELINE_STATE_DESC psoDesc = {};
+        psoDesc.pRootSignature = m_shConvolveRootSig.Get();
+        psoDesc.CS = CD3DX12_SHADER_BYTECODE(irradCSData, irradCSSize);
+        ThrowIfFailed(m_device->CreateComputePipelineState(
+            &psoDesc, IID_PPV_ARGS(&m_shConvolvePSO)));
+    }
+}
+
+// -----------------------------------------------
+void IBLSystem::DispatchIrradiance(ComPtr<ID3D12GraphicsCommandList> cmdList)
+{
+    UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    // The cubemap normally lives in UAV state (SkyCaptureCS writes it).
+    // Transition to NON_PIXEL_SHADER_RESOURCE so the CS SRV can sample all 6 faces.
+    auto toSRV = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_captureCubemap.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    cmdList->ResourceBarrier(1, &toSRV);
+
+    cmdList->SetComputeRootSignature(m_shConvolveRootSig.Get());
+    cmdList->SetPipelineState(m_shConvolvePSO.Get());
+
+    ID3D12DescriptorHeap* heaps[] = { m_shConvolveHeap.Get() };
+    cmdList->SetDescriptorHeaps(1, heaps);
+
+    D3D12_GPU_DESCRIPTOR_HANDLE base = m_shConvolveHeap->GetGPUDescriptorHandleForHeapStart();
+    cmdList->SetComputeRootDescriptorTable(0, base);           // SRV (slot 0)
+    base.ptr += descSize;
+    cmdList->SetComputeRootDescriptorTable(1, base);           // UAV (slot 1)
+
+    cmdList->Dispatch(1, 1, 1);
+
+    // UAV barrier before copy to staging.
+    auto uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(m_shOutputBuffer.Get());
+    cmdList->ResourceBarrier(1, &uavBarrier);
+
+    // Copy SH output to readback staging so the CPU can read it next frame.
+    auto toCopySrc = CD3DX12_RESOURCE_BARRIER::Transition(
+        m_shOutputBuffer.Get(),
+        D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+        D3D12_RESOURCE_STATE_COPY_SOURCE);
+    cmdList->ResourceBarrier(1, &toCopySrc);
+    cmdList->CopyResource(m_shStagingBuffer.Get(), m_shOutputBuffer.Get());
+
+    // Restore both resources to their normal inter-frame states.
+    D3D12_RESOURCE_BARRIER restoreBarriers[2] = {
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            m_shOutputBuffer.Get(),
+            D3D12_RESOURCE_STATE_COPY_SOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+        CD3DX12_RESOURCE_BARRIER::Transition(
+            m_captureCubemap.Get(),
+            D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+    };
+    cmdList->ResourceBarrier(2, restoreBarriers);
+
+    m_shStagingReady = true;
+}
+
+// -----------------------------------------------
+void IBLSystem::ReadbackSH()
+{
+    if (!m_shStagingReady) return;
+    // GPU has finished (WaitForPreviousFrame was called) — safe to read staging.
+    memcpy(m_shCBMapped, m_shStagingMapped, 9 * sizeof(XMFLOAT4));
+    m_shStagingReady = false;
 }

@@ -39,13 +39,18 @@ public:
     // Advance spring-damper physics using actual FFT wave heights at 3 sample points
     void Update(float dt, float h0, float hBow, float hSide);
 
+    // lightDir/lightColor/lightIntensity: a single light source already blended between
+    // sun and moon by the caller (see D3D12HelloTriangle.cpp's dayBlend computation),
+    // matching the approach used for the ocean surface in Renderer.cpp.
+    // shcbAddr: GPU virtual address of the SHCB constant buffer (9 SH9 coefficients)
+    // produced by IBLSystem; bound to b1 so shipShader.hlsl can call EvalSH(N).
     void Render(
         RenderContext& ctx,
-        XMFLOAT3 sunDir,    float sunIntensity,
-        XMFLOAT3 sunColor,  XMFLOAT3 cameraPos,
-        XMFLOAT3 moonDir,   float moonIntensity,
-        XMFLOAT3 moonColor, float lightningIntensity,
-        const ShipCloudParams& cloud);
+        XMFLOAT3 lightDir,   float lightIntensity,
+        XMFLOAT3 lightColor, XMFLOAT3 cameraPos,
+        float lightningIntensity,
+        const ShipCloudParams& cloud,
+        D3D12_GPU_VIRTUAL_ADDRESS shcbAddr);
 
     void RenderDepth(
         ID3D12GraphicsCommandList* cmd,
@@ -75,17 +80,15 @@ private:
     {
         XMMATRIX viewProj;                            // 64
         XMFLOAT3 worldPos;      float scale;          // 16
-        XMFLOAT3 sunDir;        float sunIntensity;   // 16
-        XMFLOAT3 sunColor;      float yaw;            // 16
-        XMFLOAT3 cameraPos;     float pad0;           // 16
-        XMFLOAT3 moonDir;       float moonIntensity;  // 16
-        XMFLOAT3 moonColor;     float lightningIntensity; // 16
+        XMFLOAT3 lightDir;      float lightIntensity; // 16  -- single sun/moon-blended light (see Render())
+        XMFLOAT3 lightColor;    float yaw;            // 16
+        XMFLOAT3 cameraPos;     float lightningIntensity; // 16
         float    time;          float cloudCoverage;  //  8
         float    cloudScale;    float cloudBase;      //  8
         float    cloudTop;      float cloudWindX;     //  8
         float    cloudWindZ;    float cloudDensityMult; // 8
         float    cloudEnabled;  float pitch;          //  8
-        float    roll;          float pad1[13];       // 56 -> total 256
+        float    roll;          float pad1[21];       // 88 -> total 256
     };
     static_assert(sizeof(ShipCB) == 256);
 

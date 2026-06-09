@@ -1,5 +1,7 @@
-// Ship model VS/PS (PBR: GGX Cook-Torrance + sky ambient) + shadow depth VS.
+// Ship model VS/PS (PBR: GGX Cook-Torrance + SH9 diffuse IBL ambient) + shadow depth VS.
 // ShipVS samples the FFT heightmap to follow ocean surface.
+
+#include "SkyIBL.hlsli"
 
 Texture2D    g_diffuse   : register(t0);
 Texture2D    g_normalMap : register(t1);
@@ -11,18 +13,25 @@ cbuffer ShipCB : register(b0)
 {
     matrix  viewProj;
     float3  worldPos;       float scale;
-    float3  sunDir;         float sunIntensity;
-    float3  sunColor;       float yaw;
-    float3  cameraPos;      float pad0;
-    float3  moonDir;        float moonIntensity;
-    float3  moonColor;      float lightningIntensity;
+    // lightDir/lightColor/lightIntensity: single light source already blended between
+    // sun and moon on the CPU (dayBlend), matching the ocean's lighting model —
+    // avoids two simultaneously-active lights causing conflicting highlights at dusk/dawn.
+    float3  lightDir;       float lightIntensity;
+    float3  lightColor;     float yaw;
+    float3  cameraPos;      float lightningIntensity;
     float   time;           float cloudCoverage;
     float   cloudScale;     float cloudBase;
     float   cloudTop;       float cloudWindX;
     float   cloudWindZ;     float cloudDensityMult;
     float   cloudEnabled;   float pitch;
     float   roll;           float _pad0;
-    float4  _cp1[3];
+    float4  _cp1[5];
+};
+
+cbuffer SHCB : register(b1)
+{
+    float4 shCoeffs[9];
+    float4 _shPad[7];
 };
 
 cbuffer ShadowCB : register(b0)
@@ -107,8 +116,8 @@ float cs_fbm3(float3 p)
 }
 float CloudShadow(float3 worldPos)
 {
-    if (cloudEnabled < 0.5 || sunDir.y <= 0.02) return 1.0;
-    float3 sd     = normalize(sunDir);
+    if (cloudEnabled < 0.5 || lightDir.y <= 0.02) return 1.0;
+    float3 sd     = normalize(lightDir);
     float  tStart = (cloudBase - worldPos.y) / max(sd.y, 0.02);
     float  tEnd   = (cloudTop  - worldPos.y) / max(sd.y, 0.02);
     if (tEnd <= tStart) return 1.0;
@@ -177,7 +186,7 @@ float4 ShipPS(VSOut i) : SV_Target
     float3x3 TBN = CotangentFrame(normalize(i.wNorm), i.wPos, i.uv);
     float3 N = normalize(mul(normSamp, TBN));
     float3 V = normalize(cameraPos - i.wPos);
-    float3 L = normalize(sunDir);
+    float3 L = normalize(lightDir);
     float3 H = normalize(V + L);
 
     float NdotL = saturate(dot(N, L));
@@ -195,27 +204,32 @@ float4 ShipPS(VSOut i) : SV_Target
     float3 spec   = D * F * G * 2.0;  // x2 boost: wood F0=0.04 otherwise invisible
     float3 kd     = (1.0 - F) * (1.0 - metal);
 
-    // cloudShad: per-pixel ray-march shadow from clouds above (sun only, day)
+    // cloudShad: per-pixel ray-march shadow from clouds above (only meaningful while the
+    // blended light sits above the horizon; CloudShadow() early-outs otherwise)
     float  cloudShad = CloudShadow(i.wPos);
-    // cloudOcc: coverage-based uniform occlusion applied to moon and ambient (day+night)
+    // cloudOcc: coverage-based uniform occlusion applied to ambient (day+night)
     float  cloudOcc  = cloudEnabled > 0.5 ? lerp(1.0, 0.20, cloudCoverage) : 1.0;
 
-    float3 direct = (kd * albedo / PI + spec) * sunColor * sunIntensity * NdotL * cloudShad * 4.0;
+    // Single light source, already blended between sun and moon by the CPU (dayBlend) —
+    // mirrors the ocean's lighting model so the ship never receives two simultaneously
+    // active lights from opposite directions (which used to leak "moonlight" onto the
+    // sunlit side of the hull at full daylight, since the moon's intensity never faded
+    // with its elevation).
+    float3 direct = (kd * albedo / PI + spec) * lightColor * lightIntensity * NdotL * cloudShad * 4.0;
 
-    // Moon: dimmed by cloud coverage so overcast night is noticeably darker
-    float moonNdotL  = saturate(dot(N, normalize(moonDir)));
-    float3 moonLight = kd * albedo / PI * moonColor * moonIntensity * moonNdotL * 6.0 * cloudOcc;
-
-    // Sky-colored ambient: also reduced under cloud cover
-    float3 skyAmb  = lerp(float3(0.10, 0.15, 0.25), sunColor, saturate(sunDir.y));
-    float3 diffAmb = albedo * (1.0 - metal) * ao * skyAmb * 0.40 * cloudOcc;
-    float3 specAmb = F0 * ao * skyAmb * 0.15 * cloudOcc;
-    float3 ambient = diffAmb + specAmb;
+    // Diffuse irradiance from SH9 convolution of the captured sky cubemap.
+    // Coefficients are pre-multiplied by cosine-lobe factors in IrradianceConvolveCS,
+    // so EvalSH is a pure polynomial of N.  Clamped to zero to avoid negative radiance
+    // from numerical noise in the SH basis at extreme angles.
+    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
+    float3 diffAmb    = albedo * (1.0 - metal) * irradiance / PI * ao * cloudOcc;
+    float3 specAmb    = F0 * ao * irradiance * 0.15 * cloudOcc;
+    float3 ambient    = diffAmb + specAmb;
 
     // Lightning: brief white flash illuminating the whole ship
     float3 lightning = albedo * lightningIntensity * float3(0.85, 0.90, 1.0) * 0.6;
 
-    return float4(direct + moonLight + ambient + lightning, 1.0);
+    return float4(direct + ambient + lightning, 1.0);
 }
 
 float4 ShipShadowVS(VSIn v) : SV_Position
