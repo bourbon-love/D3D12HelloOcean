@@ -90,6 +90,9 @@
     <ClInclude Include="source\RainbowEffect.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="source\IBLSystem.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Main.cpp">
@@ -156,6 +159,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="source\RainbowEffect.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="source\IBLSystem.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="source\PostProcessPipelineImpl.cpp">

@@ -152,6 +152,7 @@
     <ClInclude Include="source\VolumetricClouds.h" />
     <ClInclude Include="source\RainbowEffect.h" />
     <ClInclude Include="source\ShipModel.h" />
+    <ClInclude Include="source\IBLSystem.h" />
     <ClInclude Include="D3D12HelloTriangle.h" />
     <ClInclude Include="DXSample.h" />
     <ClInclude Include="DXSampleHelper.h" />
@@ -175,6 +176,7 @@
     <ClCompile Include="source\SkyDome.cpp" />
     <ClCompile Include="source\VolumetricClouds.cpp" />
     <ClCompile Include="source\RainbowEffect.cpp" />
+    <ClCompile Include="source\IBLSystem.cpp" />
     <ClCompile Include="source\WeatherSystem.cpp" />
     <ClCompile Include="Win32Application.cpp" />
     <ClCompile Include="D3D12HelloTriangle.cpp" />
