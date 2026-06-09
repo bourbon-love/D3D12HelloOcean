@@ -101,7 +101,6 @@ float4 FloatObjPS(VSOut i) : SV_Target
     float diff    = saturate(dot(N, L));
     float spec    = pow(saturate(dot(N, H)), 28.0) * 0.12;
     float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
-    float3 diffAmb    = base * irradiance / PI;
 
     // Specular IBL via Karis split-sum (wet wood: roughness=0.60, F0=0.04)
     float  NdotV       = max(dot(N, V), 0.0001);
@@ -109,7 +108,9 @@ float4 FloatObjPS(VSOut i) : SV_Target
     float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, 0.60 * (PREFILTER_MIPS - 1)).rgb;
     float2 envBRDF     = g_brdfLUT.Sample(g_sampler, float2(NdotV, 0.60)).rg;
     float3 F0_vec      = float3(0.04, 0.04, 0.04);
-    float3 specAmb     = (F0_vec * envBRDF.x + envBRDF.y) * prefiltered;
+    float3 specBRDF    = F0_vec * envBRDF.x + envBRDF.y;
+    float3 diffAmb     = base * (1.0 - specBRDF) * irradiance / PI;
+    float3 specAmb     = specBRDF * prefiltered * 0.35;
 
     float3 color = diffAmb + base * diff * sunIntensity * sunColor + spec * sunColor + specAmb;
     return float4(color, 1.0);
