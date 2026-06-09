@@ -226,6 +226,9 @@
     <CustomBuild Include="shaders\IrradianceConvolveCS.hlsl">
       <Filter>Assets\Shaders</Filter>
     </CustomBuild>
+    <CustomBuild Include="shaders\PrefilterSpecularCS.hlsl">
+      <Filter>Assets\Shaders</Filter>
+    </CustomBuild>
     <CustomBuild Include="shaders\ssao.hlsl">
       <Filter>Assets\Shaders</Filter>
     </CustomBuild>
