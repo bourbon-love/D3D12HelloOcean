@@ -7,11 +7,13 @@
 
 void FloatingObject::Init(
     ComPtr<ID3D12Device> device,
+    IBLSystem*           ibl,
     ID3D12Resource*      heightMap,
     const UINT8* vsData, UINT vsLen,
     const UINT8* psData, UINT psLen)
 {
     m_device = device;
+    m_ibl    = ibl;
 
     // Constant buffer array: surface boxes + underwater boxes
     {
@@ -26,13 +28,15 @@ void FloatingObject::Init(
         m_cb->Map(0, &r, reinterpret_cast<void**>(&m_mappedCBs));
     }
 
-    // SRV heap: slot 0 = heightMap
+    // SRV heap: [0] heightMap, [1] prefilter cubemap, [2] BRDF LUT
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd = {};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors = 1;
+        hd.NumDescriptors = 3;
         hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_srvHeap)));
+
+        UINT incr = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
         sd.Format                  = DXGI_FORMAT_R32G32B32A32_FLOAT;
@@ -41,15 +45,22 @@ void FloatingObject::Init(
         sd.Texture2D.MipLevels     = 1;
         m_device->CreateShaderResourceView(heightMap, &sd,
             m_srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+        CD3DX12_CPU_DESCRIPTOR_HANDLE slot1(m_srvHeap->GetCPUDescriptorHandleForHeapStart(), 1, incr);
+        m_device->CopyDescriptorsSimple(1, slot1, m_ibl->GetPrefilterSRVCPU(),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        CD3DX12_CPU_DESCRIPTOR_HANDLE slot2(m_srvHeap->GetCPUDescriptorHandleForHeapStart(), 2, incr);
+        m_device->CopyDescriptorsSimple(1, slot2, m_ibl->GetBRDFLutSRVCPU(),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 
-    // Root signature: [0] CBV(b0 ObjectCB)  [1] SRV table(t0)  [2] CBV(b1 SHCB)
+    // Root signature: [0] CBV(b0 ObjectCB)  [1] SRV table(t0..t2)  [2] CBV(b1 SHCB)
     {
         CD3DX12_ROOT_PARAMETER params[3];
         params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
         CD3DX12_DESCRIPTOR_RANGE srvRange;
-        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
-        params[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_VERTEX);
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);
+        params[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
         params[2].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_PIXEL);
 
         CD3DX12_STATIC_SAMPLER_DESC sampler(0,

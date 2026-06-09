@@ -266,7 +266,7 @@ void D3D12HelloTriangle::LoadAssets()
     ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"floating_object_FloatObjVS.cso").c_str(), &pFOVS, &foVsLen));
     ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"floating_object_FloatObjPS.cso").c_str(), &pFOPS, &foPsLen));
     m_floatingObject = std::make_unique<FloatingObject>();
-    m_floatingObject->Init(m_device, m_oceanFFT->GetHeightMap(), pFOVS, foVsLen, pFOPS, foPsLen);
+    m_floatingObject->Init(m_device, m_iblSystem.get(), m_oceanFFT->GetHeightMap(), pFOVS, foVsLen, pFOPS, foPsLen);
     free(pFOVS); free(pFOPS);
 
     // ShipModel
@@ -295,7 +295,7 @@ void D3D12HelloTriangle::LoadAssets()
     ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"fish_FishVS.cso").c_str(), &pFishVS, &fishVsLen));
     ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"fish_FishPS.cso").c_str(), &pFishPS, &fishPsLen));
     m_fishSchool = std::make_unique<FishSchool>();
-    m_fishSchool->Init(m_device, pFishVS, fishVsLen, pFishPS, fishPsLen);
+    m_fishSchool->Init(m_device, m_iblSystem.get(), pFishVS, fishVsLen, pFishPS, fishPsLen);
     free(pFishVS); free(pFishPS);
 
 

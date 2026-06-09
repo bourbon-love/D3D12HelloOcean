@@ -70,6 +70,9 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <button class="nav-btn" onclick="navTo('s7',this)">⑦ 読み返しレイテンシ</button>
   <button class="nav-btn" onclick="navTo('s8',this)">⑧ 全面EvalSH展開</button>
   <button class="nav-btn" onclick="navTo('s9',this)">⑨ 事前フィルタCS</button>
+  <button class="nav-btn" onclick="navTo('s10',this)">⑩ 船体スペキュラ</button>
+  <button class="nav-btn" onclick="navTo('s11',this)">⑪ 海面スペキュラ</button>
+  <button class="nav-btn" onclick="navTo('s12',this)">⑫ Phase C 完了</button>
 </nav>
 
 <!-- ══════════════ S1: 为什么程序化天空能跳过 cubemap 光栅化 ══════════════ -->
@@ -464,6 +467,90 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
     m_prefilterCubemap : UAV → PIXEL_SRV | NON_PIXEL_SRV<br>
     m_captureCubemap&nbsp;&nbsp;&nbsp;: NON_PIXEL_SRV → UAV
   </div>
+</section>
+
+<!-- ─── Section 10: Ship specular IBL (C2) ─────────────────────────────────── -->
+<section class="section" id="s10">
+  <h2>⑩ 船体スペキュラ IBL — PBR パイプラインへの組み込み (C2)</h2>
+  <p>Phase C の最初の表面は <strong>shipShader.hlsl</strong>。
+  船体はアルベド・ノーマル・ARM(AO/Roughness/Metallic) の 3 枚テクスチャを持つフル PBR マテリアルなので、
+  roughness と F0 は ARM マップから読み取って split-sum に渡せる。</p>
+
+  <h3>シェーダー側の変更点</h3>
+  <div class="formula">
+    <em>// 追加したテクスチャスロット</em><br>
+    TextureCube  g_prefilter : <b>register(t4)</b>;  <em>// GGX 事前フィルタキューブマップ</em><br>
+    Texture2D    g_brdfLUT   : <b>register(t5)</b>;  <em>// BRDF 積分 LUT</em><br><br>
+    <em>// ShipPS 内の split-sum 計算</em><br>
+    float3 R           = reflect(-V, N);<br>
+    float3 prefiltered = g_prefilter.<b>SampleLevel</b>(g_sampler, R, rough * (PREFILTER_MIPS - 1)).rgb;<br>
+    float2 envBRDF     = g_brdfLUT.<b>Sample</b>(g_sampler, float2(NdotV, rough)).rg;<br>
+    float3 specAmb     = (F0 * envBRDF.x + envBRDF.y) * prefiltered * ao * cloudOcc;
+  </div>
+
+  <h3>ディスクリプタコピー</h3>
+  <p>DX12 の「1 ヒープ制約」により、IBLSystem の SRV ヒープを直接 GPU にバインドするのではなく、
+  ShipModel が持つ自前のヒープへ <code>CopyDescriptorsSimple</code> で転写する。
+  この方式なら IBLSystem の内部ヒープに一切干渉しない。</p>
+  <div class="formula">
+    ShipModel のヒープ (6 スロット)<br>
+    [0] diffuse &nbsp; [1] normalMap &nbsp; [2] ARM<br>
+    [3] heightMap &nbsp; <b>[4] prefilter</b> &nbsp; <b>[5] brdfLUT</b>
+  </div>
+
+  <canvas id="c10" width="700" height="180" style="width:100%;border-radius:8px;display:block;margin:16px 0"></canvas>
+  <p style="color:#888;font-size:13px;text-align:center">船体マテリアルの roughness 分布（ARM.g チャンネル、範囲 0.04–0.65 にクランプ）</p>
+</section>
+
+<!-- ─── Section 11: Ocean surface specular IBL (C3) ──────────────────────── -->
+<section class="section" id="s11">
+  <h2>⑪ 海面スペキュラ IBL — 鏡面海水の間接反射 (C3)</h2>
+  <p>海面は船体と異なりテクスチャなし。<strong>固定マテリアル</strong>（roughness=0.05, F0=0.02）を使う。
+  この極低 roughness は <em>mip 0（最もシャープ）</em>を参照することを意味し、
+  太陽方向に近い反射ベクトルでは鏡のような正反射になる。</p>
+
+  <h3>shaders.hlsl への追加スロット</h3>
+  <div class="formula">
+    Texture2D         g_prefilter : <b>register(t5)</b>;  <em>// 海洋 SRV ヒープ slot 5</em><br>
+    Texture2D         g_brdfLUT   : <b>register(t6)</b>;  <em>// 海洋 SRV ヒープ slot 6</em><br><br>
+    <em>// OceanPS 内で既存の fresnel 反射計算に加算</em><br>
+    float  waterRoughness = 0.05;<br>
+    float3 prefilt  = g_prefilter.SampleLevel(g_sampler, reflectDir, waterRoughness*(PREFILTER_MIPS-1)).rgb;<br>
+    float2 envBRDF  = g_brdfLUT.Sample(g_sampler, float2(NdotV, waterRoughness)).rg;<br>
+    float3 specIBL  = (F0_vec * envBRDF.x + envBRDF.y) * prefilt * cloudShad;<br>
+    color = fresnel*reflectSample + transWeight*transmitted + specularColor + <b>specIBL</b> + diffuse*0.30;
+  </div>
+
+  <h3>roughness vs ミップ — 海面と他マテリアルの比較</h3>
+  <canvas id="c11" width="700" height="200" style="width:100%;border-radius:8px;display:block;margin:16px 0"></canvas>
+</section>
+
+<!-- ─── Section 12: FloatingObject + FishSchool IBL — Phase C complete ──── -->
+<section class="section" id="s12">
+  <h2>⑫ FloatingObject + FishSchool スペキュラ IBL — Phase C 完了</h2>
+  <p>最後の 2 サーフェス：浮箱（木材）と魚群（鱗）。
+  どちらもテクスチャ駆動の roughness を持たないため<strong>固定パラメータ</strong>を採用。
+  FishSchool のルート署名には静的サンプラーが存在しなかったので新規追加している。</p>
+
+  <h3>マテリアルパラメータ</h3>
+  <div class="formula">
+    FloatingObject : roughness = <b>0.60</b>, F0 = <b>0.04</b> &nbsp;<em>// 濡れた木材</em><br>
+    FishSchool&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;: roughness = <b>0.50</b>, F0 = <b>0.03</b> &nbsp;<em>// 魚鱗</em>
+  </div>
+
+  <h3>ヒープ拡張パターン（2 システム共通）</h3>
+  <div class="formula">
+    <em>// Init() でポインタを保存し InitBuffers() でコピー</em><br>
+    hd.NumDescriptors = <b>3</b>;  <em>// 旧: 1</em><br>
+    UINT incr = device->GetDescriptorHandleIncrementSize(CBV_SRV_UAV);<br>
+    CD3DX12_CPU_DESCRIPTOR_HANDLE slot1(heap->GetCPUStart(), 1, incr);<br>
+    device->CopyDescriptorsSimple(1, slot1, ibl->GetPrefilterSRVCPU(), ...);<br>
+    CD3DX12_CPU_DESCRIPTOR_HANDLE slot2(heap->GetCPUStart(), 2, incr);<br>
+    device->CopyDescriptorsSimple(1, slot2, ibl->GetBRDFLutSRVCPU(), ...);
+  </div>
+
+  <h3>Phase C 全サーフェス split-sum 完成マトリクス</h3>
+  <canvas id="c12" width="700" height="220" style="width:100%;border-radius:8px;display:block;margin:16px 0"></canvas>
 </section>
 
 <script>
@@ -1240,6 +1327,13 @@ window.addEventListener('load', () => {
   let ctx9 = initCanvas(c9);
   bind('r9rough', 'v9rough', v => (+v).toFixed(2), v => { s9Rough = +v; drawS9(); });
   drawS9();
+
+  initCanvas(document.getElementById('c10'));
+  drawS10();
+  initCanvas(document.getElementById('c11'));
+  drawS11();
+  initCanvas(document.getElementById('c12'));
+  drawS12();
 });
 
 // ─── Section 8: EvalSH rollout matrix ────────────────────────────────────────
@@ -1383,6 +1477,220 @@ function drawS9() {
   ctx9.fillText(`roughness = ${s9Rough.toFixed(2)}`, arrowX, H - 1);
 }
 
+// ─── Section 10: Ship roughness bar chart ────────────────────────────────────
+function drawS10() {
+  const c10 = document.getElementById('c10');
+  const ctx = initCanvas(c10);
+  const W = c10.width, H = c10.height;
+  const MIPS = 6;
+  const accent = '#5b9bd5';
+  const green  = '#4caf8a';
+  const muted  = '#888';
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Ship roughness distribution: simulate ARM.g channel histogram (bimodal: hull + sail)
+  const zones = [
+    { label: 'メタル金具',  rough: 0.10, color: '#c0a060', width: 0.08 },
+    { label: '塗装木材',    rough: 0.35, color: '#a07050', width: 0.25 },
+    { label: '素木甲板',    rough: 0.55, color: '#c89060', width: 0.30 },
+    { label: '帆布',        rough: 0.62, color: '#d0c8b0', width: 0.25 },
+    { label: 'ロープ',      rough: 0.65, color: '#b0a080', width: 0.12 },
+  ];
+
+  const barArea = { x: 60, y: 20, w: W - 80, h: H - 60 };
+  const roughMax = 0.70;
+
+  zones.forEach(z => {
+    const cx = barArea.x + (z.rough / roughMax) * barArea.w;
+    const bw = z.width * barArea.w;
+    const bh = barArea.h * (0.5 + z.width * 1.2);
+    const by = barArea.y + barArea.h - bh;
+
+    const grd = ctx.createLinearGradient(0, by, 0, by + bh);
+    grd.addColorStop(0, z.color);
+    grd.addColorStop(1, z.color + '44');
+    ctx.fillStyle = grd;
+    ctx.fillRect(cx - bw/2, by, bw, bh);
+
+    ctx.fillStyle = '#ccc';
+    ctx.font = '10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(z.label, cx, by - 4);
+  });
+
+  // mip overlay
+  for (let m = 0; m < MIPS; m++) {
+    const r = m / (MIPS - 1);
+    const x = barArea.x + r * barArea.w;
+    ctx.strokeStyle = m === 0 ? '#5b9bd580' : '#5b9bd530';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, barArea.y);
+    ctx.lineTo(x, barArea.y + barArea.h);
+    ctx.stroke();
+    ctx.fillStyle = accent;
+    ctx.font = '9px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(`m${m}`, x, barArea.y + barArea.h + 12);
+  }
+
+  // x-axis label
+  ctx.fillStyle = muted;
+  ctx.font = '11px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('roughness →', barArea.x + barArea.w / 2, H - 2);
+  ctx.textAlign = 'left';
+  ctx.fillText('0.04', barArea.x, H - 2);
+  ctx.textAlign = 'right';
+  ctx.fillText('0.65', barArea.x + barArea.w, H - 2);
+}
+
+// ─── Section 11: roughness→mip comparison bar ────────────────────────────────
+function drawS11() {
+  const c11 = document.getElementById('c11');
+  const ctx = initCanvas(c11);
+  const W = c11.width, H = c11.height;
+
+  const MIPS = 6;
+  const accent = '#5b9bd5';
+  const muted  = '#888';
+
+  const surfaces = [
+    { name: '海面 (Ocean)',        rough: 0.05, F0: 0.02, color: '#4fc3f7' },
+    { name: 'FloatingObject 浮箱', rough: 0.60, F0: 0.04, color: '#a07050' },
+    { name: 'FishSchool 魚群',     rough: 0.50, F0: 0.03, color: '#80cfa0' },
+    { name: 'ShipModel 船体',      rough: 0.40, F0: 0.04, color: '#c0a060', note:'(ARM 平均)' },
+  ];
+
+  ctx.clearRect(0, 0, W, H);
+
+  const padL = 160, padR = 20, padT = 20, padB = 30;
+  const bw = W - padL - padR;
+  const rowH = (H - padT - padB) / surfaces.length;
+
+  surfaces.forEach((s, i) => {
+    const y = padT + i * rowH;
+    const barLen = (s.rough / 1.0) * bw;
+    const mipFrac = s.rough * (MIPS - 1);
+
+    // Row bg
+    ctx.fillStyle = i % 2 === 0 ? '#1e2330' : '#252b3a';
+    ctx.fillRect(0, y, W, rowH);
+
+    // Label
+    ctx.fillStyle = '#ccc';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(s.name + (s.note ? ' ' + s.note : ''), padL - 8, y + rowH / 2);
+
+    // Roughness bar
+    const grd = ctx.createLinearGradient(padL, 0, padL + bw, 0);
+    grd.addColorStop(0, '#2255aa');
+    grd.addColorStop(1, '#dd4444');
+    ctx.fillStyle = grd;
+    ctx.fillRect(padL, y + rowH * 0.25, barLen, rowH * 0.5);
+
+    // Marker at roughness
+    ctx.fillStyle = s.color;
+    ctx.beginPath();
+    ctx.arc(padL + barLen, y + rowH / 2, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Mip label
+    const mipLabel = `mip ${mipFrac.toFixed(1)}`;
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 10px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText(mipLabel, padL + barLen + 12, y + rowH / 2);
+  });
+
+  // x-axis
+  ctx.fillStyle = muted;
+  ctx.font = '10px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  for (let m = 0; m < MIPS; m++) {
+    const x = padL + (m / (MIPS - 1)) * bw;
+    ctx.fillStyle = '#5b9bd540';
+    ctx.beginPath();
+    ctx.moveTo(x, padT);
+    ctx.lineTo(x, H - padB);
+    ctx.stroke();
+    ctx.fillStyle = muted;
+    ctx.fillText(`r=${(m/(MIPS-1)).toFixed(2)}`, x, H - 4);
+  }
+}
+
+// ─── Section 12: Phase C complete matrix ─────────────────────────────────────
+function drawS12() {
+  const c12 = document.getElementById('c12');
+  const ctx = initCanvas(c12);
+  const W = c12.width, H = c12.height;
+
+  const accent = '#5b9bd5';
+  const green  = '#4caf8a';
+  const muted  = '#888';
+
+  const cols = ['サーフェス', 'シェーダー', 'rough', 'F0', 'ヒープスロット', '完了'];
+  const rows = [
+    ['ShipModel',        'shipShader.hlsl',       '0.04–0.65\n(ARMテクスチャ)', '0.04–albedo\n(metallic)', 't4/t5',   '✓'],
+    ['Ocean 海面',       'shaders.hlsl',          '0.05 固定',                  '0.02 固定',               't5/t6',   '✓'],
+    ['FloatingObject',   'floating_object.hlsl',  '0.60 固定',                  '0.04 固定',               't1/t2',   '✓'],
+    ['FishSchool 魚群',  'fish.hlsl',             '0.50 固定',                  '0.03 固定',               't1/t2',   '✓'],
+  ];
+
+  const PAD = 10;
+  const colW = (W - PAD * 2) / cols.length;
+  const rowH = (H - PAD * 2) / (rows.length + 1);
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Header
+  ctx.fillStyle = accent;
+  ctx.fillRect(PAD, PAD, W - PAD * 2, rowH);
+  ctx.fillStyle = '#fff';
+  ctx.font = `bold ${Math.max(9, rowH * 0.40)}px monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  cols.forEach((c, i) => {
+    ctx.fillText(c, PAD + i * colW + colW / 2, PAD + rowH / 2);
+  });
+
+  rows.forEach((row, ri) => {
+    const y = PAD + (ri + 1) * rowH;
+    ctx.fillStyle = ri % 2 === 0 ? '#1e2330' : '#252b3a';
+    ctx.fillRect(PAD, y, W - PAD * 2, rowH);
+
+    row.forEach((cell, ci) => {
+      let color = '#ccc';
+      if (ci === 5) color = green;
+      if (ci === 2 || ci === 3) color = '#f0c060';
+      ctx.fillStyle = color;
+      ctx.font = `${Math.max(8, rowH * 0.38)}px monospace`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const lines = cell.split('\n');
+      if (lines.length > 1) {
+        lines.forEach((line, li) => {
+          ctx.fillText(line, PAD + ci * colW + colW / 2,
+            y + rowH / 2 + (li - 0.5) * rowH * 0.40);
+        });
+      } else {
+        ctx.fillText(cell, PAD + ci * colW + colW / 2, y + rowH / 2);
+      }
+    });
+  });
+
+  // Footer caption
+  ctx.fillStyle = green;
+  ctx.font = `bold ${Math.max(9, 12)}px sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('全 4 サーフェスの間接スペキュラが Karis split-sum IBL に統一 — Phase C 完了', W / 2, H - 2);
+}
+
 window.addEventListener('resize', () => {
   ctx1 = initCanvas(c1);
   ctx2 = initCanvas(c2);
@@ -1397,6 +1705,9 @@ window.addEventListener('resize', () => {
   drawS7();
   drawS8();
   drawS9();
+  drawS10();
+  drawS11();
+  drawS12();
 });
 </script>
 </body>

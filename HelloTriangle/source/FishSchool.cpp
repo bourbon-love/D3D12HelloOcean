@@ -12,23 +12,31 @@
 // ---------------------------------------------------------------
 void FishSchool::Init(
     ComPtr<ID3D12Device> device,
+    IBLSystem*           ibl,
     const UINT8* vsData, UINT vsLen,
     const UINT8* psData, UINT psLen)
 {
     m_device = device;
+    m_ibl    = ibl;
 
-    // Root signature: [0] CBV(b0 SceneCB), [1] SRV table(t0), [2] CBV(b1 SHCB)
+    // Root signature: [0] CBV(b0 SceneCB), [1] SRV table(t0..t2), [2] CBV(b1 SHCB)
     {
         CD3DX12_ROOT_PARAMETER params[3];
         params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
 
         CD3DX12_DESCRIPTOR_RANGE srvRange;
-        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
-        params[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_VERTEX);
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0);
+        params[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
         params[2].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_PIXEL);
 
+        CD3DX12_STATIC_SAMPLER_DESC sampler(0,
+            D3D12_FILTER_MIN_MAG_MIP_LINEAR,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP,
+            D3D12_TEXTURE_ADDRESS_MODE_CLAMP);
+
         CD3DX12_ROOT_SIGNATURE_DESC rsd;
-        rsd.Init(3, params, 0, nullptr,
+        rsd.Init(3, params, 1, &sampler,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         ComPtr<ID3DBlob> sig, err;
@@ -185,13 +193,15 @@ void FishSchool::InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
             reinterpret_cast<void**>(&m_mappedSceneCB));
     }
 
-    // Descriptor heap + StructuredBuffer SRV
+    // Descriptor heap: [0] instances, [1] prefilter cubemap, [2] BRDF LUT
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd = {};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors = 1;
+        hd.NumDescriptors = 3;
         hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_srvHeap)));
+
+        UINT incr = m_device->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
         D3D12_SHADER_RESOURCE_VIEW_DESC sd = {};
         sd.ViewDimension              = D3D12_SRV_DIMENSION_BUFFER;
@@ -201,6 +211,13 @@ void FishSchool::InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
         sd.Buffer.StructureByteStride = sizeof(FishInstance);
         m_device->CreateShaderResourceView(m_instanceBuf.Get(), &sd,
             m_srvHeap->GetCPUDescriptorHandleForHeapStart());
+
+        CD3DX12_CPU_DESCRIPTOR_HANDLE slot1(m_srvHeap->GetCPUDescriptorHandleForHeapStart(), 1, incr);
+        m_device->CopyDescriptorsSimple(1, slot1, m_ibl->GetPrefilterSRVCPU(),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        CD3DX12_CPU_DESCRIPTOR_HANDLE slot2(m_srvHeap->GetCPUDescriptorHandleForHeapStart(), 2, incr);
+        m_device->CopyDescriptorsSimple(1, slot2, m_ibl->GetBRDFLutSRVCPU(),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
     }
 }
 

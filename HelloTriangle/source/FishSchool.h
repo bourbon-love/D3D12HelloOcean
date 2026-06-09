@@ -6,6 +6,7 @@
 #include <vector>
 #include "../DXSampleHelper.h"
 #include "renderer/RendererContext.h"
+#include "IBLSystem.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -17,6 +18,7 @@ public:
 
     void Init(
         ComPtr<ID3D12Device> device,
+        IBLSystem*           ibl,
         const UINT8* vsData, UINT vsLen,
         const UINT8* psData, UINT psLen);
 
@@ -79,7 +81,8 @@ private:
     ComPtr<ID3D12Resource>       m_sceneCB;
     SceneCB*                     m_mappedSceneCB = nullptr;
 
-    ComPtr<ID3D12DescriptorHeap> m_srvHeap;    // [0] = instance StructuredBuffer SRV
+    IBLSystem*                   m_ibl = nullptr;
+    ComPtr<ID3D12DescriptorHeap> m_srvHeap;    // [0] instances, [1] prefilter, [2] brdfLUT
     ComPtr<ID3D12RootSignature>  m_rootSig;
     ComPtr<ID3D12PipelineState>  m_pso;
 
