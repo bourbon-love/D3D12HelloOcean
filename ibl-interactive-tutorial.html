@@ -64,6 +64,7 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <button class="nav-btn active" onclick="navTo('s1',this)">① 程序化天空</button>
   <button class="nav-btn" onclick="navTo('s2',this)">② 方向→面映射</button>
   <button class="nav-btn" onclick="navTo('s3',this)">③ split-sum BRDF</button>
+  <button class="nav-btn" onclick="navTo('s4',this)">④ ローリング更新</button>
 </nav>
 
 <!-- ══════════════ S1: 为什么程序化天空能跳过 cubemap 光栅化 ══════════════ -->
@@ -191,6 +192,34 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <code>IBLSystem::Init</code> 只需要生成<strong>一次</strong>就能永久复用，是整条 IBL 管线里"预算得最彻底"的一环。
   再看热力图本身：低粗糙度 + 高 NdotV（视线接近法线、表面接近镜面）的角落，<code>(scale, bias)</code> 迅速逼近 <code>(1, 0)</code>——
   这正是"正对镜面时反射率趋于 F0、掠射角时趋于 1"这一菲涅耳物理直觉，在数值上的直接体现。</div>
+</section>
+
+<!-- ══════════════ S4: ローリングキャプチャ ══════════════ -->
+<section class="section" id="s4">
+  <h2><span class="sec-num">4</span>ローリングキャプチャ：6フレームで1枚を分散更新</h2>
+  <p class="subtitle">每帧只写入 cubemap 的 <strong>1 个面</strong>，6 帧一轮回。可视化对比"每帧更新全部6面（朴素方案）"和"每帧仅更新1面（滚动方案）"的 GPU 调度开销差异。</p>
+  <div class="canvas-wrap">
+    <canvas id="c4" height="220"></canvas>
+    <div class="canvas-label">滚动时间线（每个色块 = 1次 SkyCaptureCS Dispatch，灰色 = 无捕获）</div>
+  </div>
+  <div class="controls">
+    <div class="ctrl-group">
+      <label style="min-width:80px">方案对比</label>
+      <button class="preset-btn" id="btn4naive"  onclick="setS4Mode('naive')">朴素：每帧×6面</button>
+      <button class="preset-btn active" id="btn4rolling" onclick="setS4Mode('rolling')">滚动：每帧×1面</button>
+    </div>
+  </div>
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-val" id="s4disp">1</div><div class="stat-lbl">本帧 Dispatch 次数</div></div>
+    <div class="stat-card"><div class="stat-val" id="s4cost">1×</div><div class="stat-lbl">相对 GPU 耗时（估算）</div></div>
+    <div class="stat-card"><div class="stat-val" id="s4stale">≤5帧</div><div class="stat-lbl">最大面陈旧度</div></div>
+  </div>
+  <div class="insight">
+    这个优化之所以安全，是因为<strong>太阳和月亮移动极慢</strong>——完整昼夜周期长达数分钟，
+    6帧约 0.1 秒的陈旧度完全不可察觉。<br>
+    若换成快速变化的光源（爆炸、快速旋转的聚光灯），这个技巧就不再成立——
+    那种场景必须每帧更新全部 6 面，或改用预滤波球谐代替 cubemap。
+  </div>
 </section>
 
 <script>
@@ -538,10 +567,117 @@ function drawS3(){
   requestAnimationFrame(drawS3);
 }
 
+// ─── S4: rolling capture timeline ───────────────────────────────────────────
+const FACE_COLORS = ['#e05252','#52a0e0','#52c473','#c4a952','#9b52c4','#c47d52'];
+const FACE_LABELS = ['+X','-X','+Y','-Y','+Z','-Z'];
+const c4 = document.getElementById('c4');
+let ctx4, s4Mode = 'rolling', s4Frame = 0;
+let s4AnimTimer = null;
+
+function setS4Mode(mode){
+  s4Mode = mode;
+  document.getElementById('btn4naive').classList.toggle('active', mode==='naive');
+  document.getElementById('btn4rolling').classList.toggle('active', mode==='rolling');
+  if(mode==='naive'){
+    setTxt('s4disp','6'); setTxt('s4cost','6×'); setTxt('s4stale','0帧');
+  } else {
+    setTxt('s4disp','1'); setTxt('s4cost','1×'); setTxt('s4stale','≤5帧');
+  }
+}
+
+function drawS4(){
+  if(!ctx4) return;
+  const cw=W(c4), ch=H(c4);
+  ctx4.clearRect(0,0,cw,ch);
+
+  const FRAMES=18, rows=s4Mode==='naive'?6:1;
+  const padL=48, padT=28, padB=24;
+  const cellW = (cw-padL-12)/FRAMES;
+  const trackH = (ch-padT-padB)/rows;
+  const cellH  = trackH*0.72;
+  const cellGap= trackH*0.28;
+
+  // Frame number labels
+  ctx4.fillStyle=COL_TEXT2; ctx4.font='10px monospace'; ctx4.textAlign='center';
+  for(let f=0;f<FRAMES;f++){
+    const x=padL+f*cellW+cellW/2;
+    ctx4.fillText('F'+(f+1), x, padT-6);
+  }
+
+  // Row labels (face names)
+  ctx4.textAlign='right'; ctx4.font='11px sans-serif';
+  if(s4Mode==='naive'){
+    for(let r=0;r<6;r++){
+      const y=padT+r*trackH+trackH/2+4;
+      ctx4.fillStyle=FACE_COLORS[r];
+      ctx4.fillText(FACE_LABELS[r], padL-6, y);
+    }
+  } else {
+    ctx4.fillStyle=COL_TEXT2;
+    ctx4.fillText('active face', padL-6, padT+trackH/2+4);
+  }
+
+  // Draw cells
+  for(let f=0;f<FRAMES;f++){
+    const x=padL+f*cellW+2;
+    const isActive = f===s4Frame;
+    const alpha = isActive ? 1.0 : 0.38;
+
+    if(s4Mode==='naive'){
+      // All 6 faces every frame
+      for(let r=0;r<6;r++){
+        const y=padT+r*trackH+(trackH-cellH)/2;
+        ctx4.globalAlpha=alpha;
+        ctx4.fillStyle=FACE_COLORS[r];
+        ctx4.fillRect(x, y, cellW-4, cellH);
+        ctx4.globalAlpha=1;
+        if(isActive){
+          ctx4.strokeStyle='#fff'; ctx4.lineWidth=1.5;
+          ctx4.strokeRect(x+0.5, y+0.5, cellW-5, cellH-1);
+        }
+      }
+    } else {
+      // Only 1 face per frame (rolling)
+      const face = f % 6;
+      const y=padT+(trackH-cellH)/2;
+      ctx4.globalAlpha=alpha;
+      ctx4.fillStyle=FACE_COLORS[face];
+      ctx4.fillRect(x, y, cellW-4, cellH);
+      ctx4.globalAlpha=1;
+      // face label inside cell
+      if(cellW>22){
+        ctx4.fillStyle='rgba(0,0,0,0.7)'; ctx4.font='10px monospace';
+        ctx4.textAlign='center';
+        ctx4.fillText(FACE_LABELS[face], x+(cellW-4)/2, y+cellH/2+4);
+      }
+      if(isActive){
+        ctx4.strokeStyle='#fff'; ctx4.lineWidth=1.5;
+        ctx4.strokeRect(x+0.5, y+0.5, cellW-5, cellH-1);
+      }
+    }
+  }
+
+  // "current frame" arrow
+  ctx4.fillStyle=COL_ACCENT;
+  const arrowX=padL+s4Frame*cellW+cellW/2;
+  ctx4.beginPath();
+  ctx4.moveTo(arrowX-5, ch-padB+4);
+  ctx4.lineTo(arrowX+5, ch-padB+4);
+  ctx4.lineTo(arrowX, ch-padB+12);
+  ctx4.closePath();
+  ctx4.fill();
+}
+
+function tickS4(){
+  s4Frame=(s4Frame+1)%18;
+  drawS4();
+}
+
 window.addEventListener('load', () => {
   ctx1 = initCanvas(c1);
   ctx2 = initCanvas(c2);
   ctx3 = initCanvas(c3);
+  ctx4 = initCanvas(c4);
 
   bind('r1t', 'v1t', v => fmtClock(+v), v => { s1.t = v; });
   const r1t = document.getElementById('r1t');
@@ -559,12 +695,17 @@ window.addEventListener('load', () => {
   drawS1();
   drawS2();
   drawS3();
+  setS4Mode('rolling');
+  drawS4();
+  s4AnimTimer = setInterval(tickS4, 400);
 });
 
 window.addEventListener('resize', () => {
   ctx1 = initCanvas(c1);
   ctx2 = initCanvas(c2);
   ctx3 = initCanvas(c3);
+  ctx4 = initCanvas(c4);
+  drawS4();
 });
 </script>
 </body>

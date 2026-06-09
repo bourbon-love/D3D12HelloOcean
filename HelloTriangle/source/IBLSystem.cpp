@@ -306,9 +306,55 @@ void IBLSystem::RunBRDFLutOnce(ComPtr<ID3D12CommandQueue> cmdQueue)
 void IBLSystem::Dispatch(
     ComPtr<ID3D12GraphicsCommandList> cmdList,
     SkyDome* skyDome,
-    float time)
+    float /*time*/)
 {
-    // Task 5 will populate CaptureCB from skyDome's live state and dispatch
-    // SkyCaptureCS for the current face. Stub left intentionally empty.
-    (void)cmdList; (void)skyDome; (void)time;
+    // Fill CaptureCB from SkyDome's current live state (gradient + celestial params).
+    SkyDome::CaptureState cs = skyDome->GetCaptureState();
+
+    CaptureCB cb = {};
+    cb.topColor          = cs.topColor;
+    cb.middleColor       = cs.middleColor;
+    cb.bottomColor       = cs.bottomColor;
+    cb.sunPosition       = cs.sunPosition;
+    cb.time              = cs.time;
+    cb.sunColor          = cs.sunColor;
+    cb.lightningIntensity= cs.lightningIntensity;
+    cb.moonPosition      = cs.moonPosition;
+    cb.cameraY           = cs.cameraY;
+    cb.moonCrescentDir   = cs.moonCrescentDir;
+    cb.moonBodyPow       = cs.moonBodyPow;
+    cb.moonOccludePow    = cs.moonOccludePow;
+    cb.crescentOffsetAmt = cs.crescentOffsetAmt;
+    cb.faceIndex         = m_currentFace;
+    cb.faceSize          = static_cast<int>(m_faceSize);
+    memcpy(m_captureCBMapped, &cb, sizeof(cb));
+
+    // Dispatch SkyCaptureCS for the current face.
+    UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+        D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+
+    cmdList->SetComputeRootSignature(m_captureRootSig.Get());
+    cmdList->SetPipelineState(m_capturePSO.Get());
+
+    ID3D12DescriptorHeap* heaps[] = { m_captureUAVHeap.Get() };
+    cmdList->SetDescriptorHeaps(1, heaps);
+
+    cmdList->SetComputeRootConstantBufferView(
+        0, m_captureCB->GetGPUVirtualAddress());
+
+    D3D12_GPU_DESCRIPTOR_HANDLE faceHandle =
+        m_captureUAVHeap->GetGPUDescriptorHandleForHeapStart();
+    faceHandle.ptr += static_cast<UINT64>(m_currentFace) * descSize;
+    cmdList->SetComputeRootDescriptorTable(1, faceHandle);
+
+    cmdList->Dispatch(m_faceSize / 8, m_faceSize / 8, 1);
+
+    // UAV barrier: ensure the write to this face is visible before any later reader.
+    // Nothing reads the cubemap in Phase A, but correct barrier discipline now
+    // means Phase B doesn't have to retrofit it.
+    auto uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(m_captureCubemap.Get());
+    cmdList->ResourceBarrier(1, &uavBarrier);
+
+    // Advance to the next face (rolling 6-frame cycle).
+    m_currentFace = (m_currentFace + 1) % 6;
 }
