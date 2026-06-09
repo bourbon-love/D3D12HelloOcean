@@ -425,9 +425,9 @@ void IBLSystem::Dispatch(
     m_currentFace = (m_currentFace + 1) % 6;
     m_shFrameCount++;
 
-    // Convolve every 30 frames, but only after the first full 6-face cycle completes.
-    // Fires at frames 6, 36, 66, ... (m_shFrameCount % 30 == 6).
-    if (m_shFrameCount >= 6 && m_shFrameCount % 30 == 6)
+    // Convolve every 8 frames, but only after the first full 6-face cycle completes.
+    // Fires at frames 6, 14, 22, ... — 7.5x/sec at 60fps, smooth enough for sunset transitions.
+    if (m_shFrameCount >= 6 && m_shFrameCount % 8 == 6)
     {
         DispatchIrradiance(cmdList);
         DispatchPrefilter(cmdList);

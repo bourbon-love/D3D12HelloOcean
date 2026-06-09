@@ -375,7 +375,9 @@ XMFLOAT3 SkyDome::GetSunColor() const
     float h = m_sunDir.y; // -1 to 1
 
     // Sunset leans toward orange-red, noon leans toward white.
-    float t = saturate(h);
+    // Use sqrt to make the transition perceptually smoother: color stays
+    // warm-white for longer, then shifts to orange near the horizon.
+    float t = sqrtf(saturate(h));
     XMFLOAT3 sunsetColor = { 1.0f, 0.4f, 0.1f }; // sunset orange-red
     XMFLOAT3 noonColor = { 1.0f, 0.95f, 0.8f }; // warm white at noon
 
@@ -392,12 +394,13 @@ XMFLOAT3 SkyDome::GetSunColor() const
         baseColor.z + (stormColor.z - baseColor.z) * m_weatherIntensity);
 }
 
-// dayBlend: 0 when the sun is fully below the horizon (moon is the active light),
-// 1 when fully risen (sun is the active light). Smooth transition over [-0.1, 0.1],
-// matching the band SkyDome::Update() uses to fade the moon in/out (m_moonDir).
+// dayBlend: 0 when sun is fully below horizon (moon is active light),
+// 1 when fully risen (sun is active light). Transition over [-0.15, +0.15]
+// with smoothstep to avoid a sharp jump between moon-lit and sun-lit direct light.
 float SkyDome::ComputeDayBlend() const
 {
-    return std::clamp((m_sunDir.y + 0.1f) / 0.2f, 0.0f, 1.0f);
+    float t = std::clamp((m_sunDir.y + 0.15f) / 0.30f, 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t); // smoothstep
 }
 
 XMFLOAT3 SkyDome::GetActiveLightDirection() const

@@ -223,15 +223,21 @@ float4 ShipPS(VSOut i) : SV_Target
     // Diffuse irradiance from SH9 convolution of the captured sky cubemap.
     // Coefficients are pre-multiplied by cosine-lobe factors in IrradianceConvolveCS.
     float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
-    float3 diffAmb    = albedo * (1.0 - metal) * irradiance / PI * ao * cloudOcc;
 
     // Specular IBL via Karis split-sum (Phase C):
     // prefiltered env at reflection direction (mip = roughness) × BRDF LUT(NdotV, roughness).
     float3 R           = reflect(-V, N);
     float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, rough * (PREFILTER_MIPS - 1)).rgb;
     float2 envBRDF     = g_brdfLUT.Sample(g_sampler, float2(NdotV, rough)).rg;
-    float3 specAmb     = (F0 * envBRDF.x + envBRDF.y) * prefiltered * ao * cloudOcc;
-    float3 ambient     = diffAmb + specAmb;
+
+    // Energy-conserving ambient: reduce diffuse by the fraction taken by specular.
+    // Without this, diffAmb + specAmb double-counts for rough dielectric surfaces
+    // (envBRDF.y approaches 1 as roughness→1, adding a full sky-average white on top).
+    float3 specBRDF = F0 * envBRDF.x + envBRDF.y;
+    float3 kd_ibl   = (1.0 - specBRDF) * (1.0 - metal);
+    float3 diffAmb  = albedo * kd_ibl * irradiance / PI * ao * cloudOcc;
+    float3 specAmb  = specBRDF * prefiltered * ao * cloudOcc * 0.35;
+    float3 ambient  = diffAmb + specAmb;
 
     // Lightning: brief white flash illuminating the whole ship
     float3 lightning = albedo * lightningIntensity * float3(0.85, 0.90, 1.0) * 0.6;
