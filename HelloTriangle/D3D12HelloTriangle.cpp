@@ -40,6 +40,36 @@ void D3D12HelloTriangle::OnInit()
         m_imguiSrvHeap.Get(),
         m_imguiSrvHeap->GetCPUDescriptorHandleForHeapStart(),
         m_imguiSrvHeap->GetGPUDescriptorHandleForHeapStart());
+
+    // Register IBL debug SRVs into the ImGui heap (must be after m_imguiSrvHeap creation).
+    // slots 1-6: sky cubemap faces, slot 7: BRDF LUT.
+    {
+        UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        auto cpuBase = m_imguiSrvHeap->GetCPUDescriptorHandleForHeapStart();
+
+        for (UINT face = 0; face < 6; ++face)
+        {
+            D3D12_CPU_DESCRIPTOR_HANDLE cpu = { cpuBase.ptr + (face + 1) * descSize };
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format                         = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            srvDesc.ViewDimension                  = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+            srvDesc.Shader4ComponentMapping        = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2DArray.MipLevels       = 1;
+            srvDesc.Texture2DArray.FirstArraySlice = face;
+            srvDesc.Texture2DArray.ArraySize       = 1;
+            m_device->CreateShaderResourceView(
+                m_iblSystem->GetCaptureCubemap(), &srvDesc, cpu);
+        }
+
+        D3D12_CPU_DESCRIPTOR_HANDLE cpuLut = { cpuBase.ptr + 7 * descSize };
+        D3D12_SHADER_RESOURCE_VIEW_DESC lutSrv = {};
+        lutSrv.Format                    = DXGI_FORMAT_R16G16_FLOAT;
+        lutSrv.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
+        lutSrv.Shader4ComponentMapping   = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        lutSrv.Texture2D.MipLevels       = 1;
+        m_device->CreateShaderResourceView(m_iblSystem->GetBRDFLut(), &lutSrv, cpuLut);
+    }
 }
 
 // ============================================================
@@ -175,37 +205,6 @@ void D3D12HelloTriangle::LoadAssets()
     m_iblSystem->Init(m_device, m_commandQueue, 64, 128,
         pSkyCaptureCS, skyCaptureLen, pBRDFLutCS, brdfLutLen,
         pIrradCS, irradLen, pPrefilterCS, prefilterLen);
-
-    // Create per-face SRVs (slots 1-6) and LUT SRV (slot 7) in the ImGui heap
-    // so ImGui::Image() can display them in the debug preview window.
-    {
-        UINT descSize = m_device->GetDescriptorHandleIncrementSize(
-            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        auto cpuBase = m_imguiSrvHeap->GetCPUDescriptorHandleForHeapStart();
-
-        for (UINT face = 0; face < 6; ++face)
-        {
-            D3D12_CPU_DESCRIPTOR_HANDLE cpu = { cpuBase.ptr + (face + 1) * descSize };
-            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-            srvDesc.Format                         = DXGI_FORMAT_R16G16B16A16_FLOAT;
-            srvDesc.ViewDimension                  = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
-            srvDesc.Shader4ComponentMapping        = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-            srvDesc.Texture2DArray.MipLevels       = 1;
-            srvDesc.Texture2DArray.FirstArraySlice = face;
-            srvDesc.Texture2DArray.ArraySize       = 1;
-            m_device->CreateShaderResourceView(
-                m_iblSystem->GetCaptureCubemap(), &srvDesc, cpu);
-        }
-
-        D3D12_CPU_DESCRIPTOR_HANDLE cpuLut = { cpuBase.ptr + 7 * descSize };
-        D3D12_SHADER_RESOURCE_VIEW_DESC lutSrv = {};
-        lutSrv.Format                    = DXGI_FORMAT_R16G16_FLOAT;
-        lutSrv.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
-        lutSrv.Shader4ComponentMapping   = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-        lutSrv.Texture2D.MipLevels       = 1;
-        m_device->CreateShaderResourceView(m_iblSystem->GetBRDFLut(), &lutSrv, cpuLut);
-    }
-
 
     UINT8 *pVS = nullptr, *pPS = nullptr, *pBoxVS = nullptr, *pBoxPS = nullptr;
     UINT   vsLen = 0, psLen = 0, boxVsLen = 0, boxPsLen = 0;
