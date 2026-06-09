@@ -22,6 +22,9 @@
 #include "source/FishSchool.h"
 #include "source/PostProcessPipeline.h"
 #include "source/VolumetricClouds.h"
+#include "source/RainbowEffect.h"
+#include "source/ShipModel.h"
+#include "source/IBLSystem.h"
 #include "ImGUI/imgui.h"
 #include "ImGUI/imgui_impl_win32.h"
 #include "ImGUI/imgui_impl_dx12.h"
@@ -54,6 +57,9 @@ private:
     std::unique_ptr<FishSchool>         m_fishSchool;
     std::unique_ptr<PostProcessPipeline>  m_pp;
     std::unique_ptr<VolumetricClouds>     m_volumetricClouds;
+    std::unique_ptr<RainbowEffect>        m_rainbowEffect;
+    std::unique_ptr<ShipModel>           m_shipModel;
+    std::unique_ptr<IBLSystem>           m_iblSystem;
 
     std::chrono::steady_clock::time_point m_lastTime;
 
@@ -88,6 +94,9 @@ private:
 
 
     float m_prevLightningIntensity = 0.0f;
+    float m_rainMoisture           = 0.0f;
+    float m_rainbowCloudFactor     = 1.0f; // 0=overcast/no rainbow, 1=clear sky
+    bool  m_autoCloudCoverage      = true;  // weather drives VolumetricClouds coverage
 
     void LoadPipeline();
     void LoadAssets();
