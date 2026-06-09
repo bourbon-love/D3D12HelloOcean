@@ -66,6 +66,7 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <button class="nav-btn" onclick="navTo('s3',this)">③ split-sum BRDF</button>
   <button class="nav-btn" onclick="navTo('s4',this)">④ ローリング更新</button>
   <button class="nav-btn" onclick="navTo('s5',this)">⑤ Phase A 総括</button>
+  <button class="nav-btn" onclick="navTo('s6',this)">⑥ SH 畳み込み</button>
 </nav>
 
 <!-- ══════════════ S1: 为什么程序化天空能跳过 cubemap 光栅化 ══════════════ -->
@@ -267,6 +268,54 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
     この cubemap を <em>畳み込んで</em>拡散・鏡面 IBL テクスチャを生成し、
     海面・船体 PBR に <code>F0 · scale + bias</code> として足し込む——
     <strong>データは正しく揃った。次はそれをライティングに使う。</strong>
+  </div>
+</section>
+
+<!-- ══════════════ S6: SH 畳み込み ══════════════ -->
+<section class="section" id="s6">
+  <h2><span class="sec-num">6</span>球面調和関数による拡散照度の畳み込み</h2>
+  <p class="subtitle">
+    Phase B の核心。キャプチャした cubemap を <strong>9つのSH係数</strong>（SH9 = L0+L1+L2 = 1+3+5項）に畳み込む。
+    係数はコサインローブ積分済みなので、シェーダーでの評価は N だけの多項式になる。
+  </p>
+
+  <div class="formula">
+    E(N) = Σ<sub>i=0..8</sub> c<sub>i</sub> · Y<sub>i</sub>(N)
+    &nbsp;&nbsp;(c<sub>i</sub> = ∫<sub>sphere</sub> L(ω) · Y<sub>i</sub>(ω) · A<sub>l</sub> · dΩ)
+    <br>
+    <span style="font-size:0.82em;opacity:0.7">A₀=π（l=0）&nbsp; A₁=2π/3（l=1）&nbsp; A₂=π/4（l=2）— コサインローブ係数、畳み込み時に乗算済み</span>
+  </div>
+
+  <div class="canvas-wrap">
+    <canvas id="c6" height="260"></canvas>
+    <div class="canvas-label">各SH基底関数 Y_i(ω) の球面上の値（赤=正, 青=負）— クリックで選択</div>
+  </div>
+  <div class="controls">
+    <div class="ctrl-group">
+      <label>基底選択</label>
+      <div id="shBtnRow" style="display:flex;gap:4px;flex-wrap:wrap">
+        <button class="preset-btn active" onclick="setShBasis(0)">Y₀₀</button>
+        <button class="preset-btn" onclick="setShBasis(1)">Y₁⁻¹</button>
+        <button class="preset-btn" onclick="setShBasis(2)">Y₁⁰</button>
+        <button class="preset-btn" onclick="setShBasis(3)">Y₁¹</button>
+        <button class="preset-btn" onclick="setShBasis(4)">Y₂⁻²</button>
+        <button class="preset-btn" onclick="setShBasis(5)">Y₂⁻¹</button>
+        <button class="preset-btn" onclick="setShBasis(6)">Y₂⁰</button>
+        <button class="preset-btn" onclick="setShBasis(7)">Y₂¹</button>
+        <button class="preset-btn" onclick="setShBasis(8)">Y₂²</button>
+      </div>
+    </div>
+  </div>
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-val" id="s6band">l=0</div><div class="stat-lbl">バンド（l）</div></div>
+    <div class="stat-card"><div class="stat-val" id="s6al">π</div><div class="stat-lbl">コサインローブ係数 Aₗ</div></div>
+    <div class="stat-card"><div class="stat-val" id="s6range">0…0.282</div><div class="stat-lbl">値域</div></div>
+  </div>
+  <div class="insight">
+    SH9で扱えるのは<strong>低周波の照度変化のみ</strong>——シャープな影や鏡面ハイライトは表現できないが、
+    天空の昼夜・天候変化のような滑らかな明暗は完璧に捉えられる。
+    9係数 × 3ch = 27 float（108 bytes）は定数バッファの1スロット（256 bytes）に収まり、
+    追加テクスチャ不要で評価できる。積分は cubemap 全テクセルを一度だけ舐めれば済む（〜30フレームに1回で十分）。
   </div>
 </section>
 
@@ -615,6 +664,80 @@ function drawS3(){
   requestAnimationFrame(drawS3);
 }
 
+// ─── S6: SH basis function visualizer (equirectangular projection) ──────────
+const c6 = document.getElementById('c6');
+let ctx6;
+let s6Basis = 0;
+// SH basis functions Y_i(x,y,z): same order as IrradianceConvolveCS.hlsl
+const SH_BASIS = [
+  (x,y,z) =>  0.282095,                          // Y00
+  (x,y,z) =>  0.488603 * y,                      // Y1-1
+  (x,y,z) =>  0.488603 * z,                      // Y10
+  (x,y,z) =>  0.488603 * x,                      // Y11
+  (x,y,z) =>  1.092548 * x * y,                  // Y2-2
+  (x,y,z) =>  1.092548 * y * z,                  // Y2-1
+  (x,y,z) =>  0.315392 * (3*z*z - 1),            // Y20
+  (x,y,z) =>  1.092548 * x * z,                  // Y21
+  (x,y,z) =>  0.546274 * (x*x - y*y),            // Y22
+];
+const SH_BAND   = [0, 1,1,1, 2,2,2,2,2];
+const SH_AL_STR = ['π', '2π/3','2π/3','2π/3', 'π/4','π/4','π/4','π/4','π/4'];
+const SH_RANGE  = ['0…0.282','−0.489…0.489','−0.489…0.489','−0.489…0.489',
+                   '−1.093…1.093','−1.093…1.093','−0.631…0.946',
+                   '−1.093…1.093','−0.546…0.546'];
+
+function setShBasis(i){
+  s6Basis = i;
+  document.querySelectorAll('#shBtnRow .preset-btn').forEach((b,j) =>
+    b.classList.toggle('active', j===i));
+  setTxt('s6band', 'l='+SH_BAND[i]);
+  setTxt('s6al',   SH_AL_STR[i]);
+  setTxt('s6range',SH_RANGE[i]);
+  drawS6();
+}
+
+function drawS6(){
+  if(!ctx6) return;
+  const cw=W(c6), ch=H(c6);
+  const fn = SH_BASIS[s6Basis];
+  const imgData = ctx6.createImageData(cw, ch);
+
+  for(let py=0; py<ch; py++){
+    const theta = py/ch * Math.PI;           // 0=north, π=south
+    const sinT = Math.sin(theta), cosT = Math.cos(theta);
+    for(let px=0; px<cw; px++){
+      const phi = px/cw * 2*Math.PI;         // 0..2π (longitude)
+      const x = sinT * Math.cos(phi);
+      const y = cosT;
+      const z = sinT * Math.sin(phi);
+      const v = fn(x, y, z);                 // SH value in [-max, +max]
+      const t = clamp((v + 1.2) / 2.4, 0, 1);
+      let r,g,b;
+      if(v >= 0){
+        const s = Math.min(v * 1.1, 1);
+        const col = lerp3([30,40,60],[230,80,60], s);
+        r = Math.round(col[0]); g = Math.round(col[1]); b = Math.round(col[2]);
+      } else {
+        const s = Math.min(-v * 1.1, 1);
+        const col = lerp3([30,40,60],[50,100,230], s);
+        r = Math.round(col[0]); g = Math.round(col[1]); b = Math.round(col[2]);
+      }
+      const idx = (py*cw + px)*4;
+      imgData.data[idx]   = r;
+      imgData.data[idx+1] = g;
+      imgData.data[idx+2] = b;
+      imgData.data[idx+3] = 255;
+    }
+  }
+  ctx6.putImageData(imgData, 0, 0);
+
+  // Axis labels
+  ctx6.fillStyle = 'rgba(255,255,255,0.5)'; ctx6.font = '11px sans-serif';
+  ctx6.textAlign = 'left';  ctx6.fillText('+X→', 4, ch/2+4);
+  ctx6.textAlign = 'right'; ctx6.fillText('+Y↑(N)', cw-4, 12);
+  ctx6.textAlign = 'center';ctx6.fillText('equirectangular（経緯度展開図）', cw/2, ch-6);
+}
+
 // ─── S5: cubemap unfolded-cross debug view ──────────────────────────────────
 const c5 = document.getElementById('c5');
 let ctx5, s5 = { sunY: 0.50 };
@@ -817,6 +940,7 @@ window.addEventListener('load', () => {
   ctx3 = initCanvas(c3);
   ctx4 = initCanvas(c4);
   ctx5 = initCanvas(c5);
+  ctx6 = initCanvas(c6);
 
   bind('r1t', 'v1t', v => fmtClock(+v), v => { s1.t = v; });
   const r1t = document.getElementById('r1t');
@@ -840,6 +964,7 @@ window.addEventListener('load', () => {
   drawS4();
   s4AnimTimer = setInterval(tickS4, 400);
   drawS5();
+  setShBasis(0);
 });
 
 window.addEventListener('resize', () => {
@@ -848,8 +973,10 @@ window.addEventListener('resize', () => {
   ctx3 = initCanvas(c3);
   ctx4 = initCanvas(c4);
   ctx5 = initCanvas(c5);
+  ctx6 = initCanvas(c6);
   drawS4();
   drawS5();
+  drawS6();
 });
 </script>
 </body>
