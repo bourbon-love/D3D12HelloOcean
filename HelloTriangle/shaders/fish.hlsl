@@ -105,8 +105,9 @@ float4 FishPS(VSOut p) : SV_TARGET
         float3 prefilt  = g_prefilter.SampleLevel(g_sampler, R_fish, 0.50 * (PREFILTER_MIPS - 1)).rgb;
         float2 envBRDF  = g_brdfLUT.Sample(g_sampler, float2(NdotV_f, 0.50)).rg;
         float3 F0_fish  = float3(0.03, 0.03, 0.03);
-        float3 specBRDF = F0_fish * envBRDF.x + envBRDF.y;
-        col += specBRDF * prefilt * absorb * 0.35;
+        // Pure dielectric: drop envBRDF.y bias (diffuse-like, already in SH).
+        float3 specBRDF = F0_fish * envBRDF.x;
+        col += specBRDF * prefilt * absorb * 0.60;
     }
 
     // Bioluminescence: colorful glow when underwater at night.

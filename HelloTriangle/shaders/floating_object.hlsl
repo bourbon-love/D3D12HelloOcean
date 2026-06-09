@@ -108,9 +108,10 @@ float4 FloatObjPS(VSOut i) : SV_Target
     float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, 0.60 * (PREFILTER_MIPS - 1)).rgb;
     float2 envBRDF     = g_brdfLUT.Sample(g_sampler, float2(NdotV, 0.60)).rg;
     float3 F0_vec      = float3(0.04, 0.04, 0.04);
-    float3 specBRDF    = F0_vec * envBRDF.x + envBRDF.y;
+    // Drop envBRDF.y for this pure dielectric: bias term ≈ diffuse and is already in SH.
+    float3 specBRDF    = F0_vec * envBRDF.x;
     float3 diffAmb     = base * (1.0 - specBRDF) * irradiance / PI;
-    float3 specAmb     = specBRDF * prefiltered * 0.35;
+    float3 specAmb     = specBRDF * prefiltered * 0.60;
 
     float3 color = diffAmb + base * diff * sunIntensity * sunColor + spec * sunColor + specAmb;
     return float4(color, 1.0);
