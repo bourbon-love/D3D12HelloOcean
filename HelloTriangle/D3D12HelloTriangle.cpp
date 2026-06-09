@@ -604,6 +604,10 @@ void D3D12HelloTriangle::BuildImGuiUI()
         ImGui::Text("Moisture: %.2f", m_rainMoisture);
     }
 
+    // --- IBL ---
+    ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "IBL");
+    ImGui::Checkbox("IBL Debug Preview", &m_showIBLDebug);
+
     ImGui::End();
 
     // ============================================================
@@ -727,7 +731,8 @@ void D3D12HelloTriangle::BuildImGuiUI()
 
     ImGui::End();
 
-    // ---- IBL Debug Preview ----
+    // ---- IBL Debug Preview (gated) ----
+    if (!m_showIBLDebug) return;
     ImGui::SetNextWindowSize(ImVec2(340, 310), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowPos(ImVec2(10, 280), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("IBL Debug", nullptr))
