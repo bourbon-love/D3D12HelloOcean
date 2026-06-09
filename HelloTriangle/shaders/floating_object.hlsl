@@ -11,7 +11,8 @@ TextureCube  g_prefilter : register(t1);  // GGX prefiltered specular cubemap (I
 Texture2D    g_brdfLUT   : register(t2);  // BRDF integration LUT (IBL Phase A)
 SamplerState g_sampler   : register(s0);
 
-static const uint PREFILTER_MIPS = 6;
+static const uint  PREFILTER_MIPS = 6;
+static const float IBL_INTENSITY  = 0.40; // see shipShader.hlsl — sky HDR compensation
 
 cbuffer ObjectCB : register(b0)
 {
@@ -100,12 +101,12 @@ float4 FloatObjPS(VSOut i) : SV_Target
 
     float diff    = saturate(dot(N, L));
     float spec    = pow(saturate(dot(N, H)), 28.0) * 0.12;
-    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
+    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0) * IBL_INTENSITY;
 
     // Specular IBL via Karis split-sum (wet wood: roughness=0.60, F0=0.04)
     float  NdotV       = max(dot(N, V), 0.0001);
     float3 R           = reflect(-V, N);
-    float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, 0.60 * (PREFILTER_MIPS - 1)).rgb;
+    float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, 0.60 * (PREFILTER_MIPS - 1)).rgb * IBL_INTENSITY;
     float2 envBRDF     = g_brdfLUT.Sample(g_sampler, float2(NdotV, 0.60)).rg;
     float3 F0_vec      = float3(0.04, 0.04, 0.04);
     // Drop envBRDF.y for this pure dielectric: bias term ≈ diffuse and is already in SH.

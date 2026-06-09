@@ -15,7 +15,8 @@ SamplerState                   g_sampler   : register(s0);
 
 #include "SkyIBL.hlsli"
 
-static const uint PREFILTER_MIPS = 6;
+static const uint  PREFILTER_MIPS = 6;
+static const float IBL_INTENSITY  = 0.40; // see shipShader.hlsl — sky HDR compensation
 
 cbuffer SceneCB : register(b0)
 {
@@ -84,7 +85,7 @@ float4 FishPS(VSOut p) : SV_TARGET
     float3 L = normalize(sunDir);
 
     float  diffuse = max(0.0, dot(N, L)) * sunIntensity;
-    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
+    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0) * IBL_INTENSITY;
     float3 ambCol  = irradiance / PI;
     float  rim     = max(0.0, dot(-N, L)) * sunIntensity * 0.20;
 
@@ -102,7 +103,7 @@ float4 FishPS(VSOut p) : SV_TARGET
         float3 V_fish   = normalize(cameraPos - p.worldPos);
         float3 R_fish   = reflect(-V_fish, N);
         float  NdotV_f  = max(dot(N, V_fish), 0.0001);
-        float3 prefilt  = g_prefilter.SampleLevel(g_sampler, R_fish, 0.50 * (PREFILTER_MIPS - 1)).rgb;
+        float3 prefilt  = g_prefilter.SampleLevel(g_sampler, R_fish, 0.50 * (PREFILTER_MIPS - 1)).rgb * IBL_INTENSITY;
         float2 envBRDF  = g_brdfLUT.Sample(g_sampler, float2(NdotV_f, 0.50)).rg;
         float3 F0_fish  = float3(0.03, 0.03, 0.03);
         // Pure dielectric: drop envBRDF.y bias (diffuse-like, already in SH).
