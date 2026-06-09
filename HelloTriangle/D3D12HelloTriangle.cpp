@@ -131,20 +131,21 @@ void D3D12HelloTriangle::LoadAssets()
 {
 
     {
-        CD3DX12_ROOT_PARAMETER rootParameters[4];
+        CD3DX12_ROOT_PARAMETER rootParameters[5];
         rootParameters[0].InitAsConstantBufferView(0);
         CD3DX12_DESCRIPTOR_RANGE srvRange;
         srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 5, 0);
         rootParameters[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
         rootParameters[2].InitAsConstantBufferView(1);
         rootParameters[3].InitAsConstantBufferView(2);
+        rootParameters[4].InitAsConstantBufferView(3);  // b3 SHCB for EvalSH in ocean PS
         CD3DX12_STATIC_SAMPLER_DESC sampler(0,
             D3D12_FILTER_MIN_MAG_MIP_LINEAR,
             D3D12_TEXTURE_ADDRESS_MODE_WRAP,
             D3D12_TEXTURE_ADDRESS_MODE_WRAP,
             D3D12_TEXTURE_ADDRESS_MODE_WRAP);
         CD3DX12_ROOT_SIGNATURE_DESC rsd;
-        rsd.Init(4, rootParameters, 1, &sampler,
+        rsd.Init(5, rootParameters, 1, &sampler,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
         ComPtr<ID3DBlob> signature, error;
         ThrowIfFailed(D3D12SerializeRootSignature(&rsd,
@@ -881,10 +882,12 @@ void D3D12HelloTriangle::OnRender()
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(0, 180, 160), L"Underwater");
     m_floatingObject->RenderUnderwater(ctx,
         m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
-        m_skyDome->GetActiveLightColor(), m_renderer->GetCameraPos());
+        m_skyDome->GetActiveLightColor(), m_renderer->GetCameraPos(),
+        m_iblSystem->GetSHCB());
     m_fishSchool->Render(ctx,
         m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
-        m_skyDome->GetActiveLightColor(), m_renderer->GetCameraPos(), m_renderer->GetTime());
+        m_skyDome->GetActiveLightColor(), m_renderer->GetCameraPos(), m_renderer->GetTime(),
+        m_iblSystem->GetSHCB());
     PIXEndEvent(m_commandList.Get());
 
     m_pp->TakeRefractionSnapshot(m_commandList.Get());
@@ -901,11 +904,15 @@ void D3D12HelloTriangle::OnRender()
 
     // ---- Ocean ----
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(0, 100, 200), L"Ocean");
+    // Bind SHCB at slot 4 (b3) before Render(); Renderer calls SetGraphicsRootSignature
+    // with the same m_rootSignature, which preserves already-bound root parameters.
+    m_commandList->SetGraphicsRootConstantBufferView(4, m_iblSystem->GetSHCB());
     m_renderer->Render(ctx);
     // RenderWaterBox is for single-tile boundary box only; hidden in infinite ocean mode
     m_floatingObject->Render(ctx,
         m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
-        m_skyDome->GetActiveLightColor(), m_renderer->GetCameraPos());
+        m_skyDome->GetActiveLightColor(), m_renderer->GetCameraPos(),
+        m_iblSystem->GetSHCB());
     PIXEndEvent(m_commandList.Get());
 
     // ---- Ship ----

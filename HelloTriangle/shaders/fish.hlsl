@@ -10,12 +10,20 @@ struct FishInstance
 
 StructuredBuffer<FishInstance> g_instances : register(t0);
 
+#include "SkyIBL.hlsli"
+
 cbuffer SceneCB : register(b0)
 {
     float4x4 viewProj;
     float3   sunDir;      float sunIntensity;
     float3   sunColor;    float time;
     float3   cameraPos;   float pad_cb;
+};
+
+cbuffer SHCB : register(b1)
+{
+    float4 shCoeffs[9];
+    float4 _shPad[7];
 };
 
 struct VSIn
@@ -71,7 +79,8 @@ float4 FishPS(VSOut p) : SV_TARGET
     float3 L = normalize(sunDir);
 
     float  diffuse = max(0.0, dot(N, L)) * sunIntensity;
-    float  ambient = 0.35;
+    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
+    float3 ambCol  = irradiance / PI;
     float  rim     = max(0.0, dot(-N, L)) * sunIntensity * 0.20;
 
     // Beer-Lambert water absorption — matches tonemapping.hlsl clear-ocean coefficients.
@@ -81,7 +90,7 @@ float4 FishPS(VSOut p) : SV_TARGET
         exp(-0.025 * depth),
         exp(-0.010 * depth));
 
-    float3 col = p.color.rgb * (ambient + diffuse + rim) * sunColor * absorb;
+    float3 col = p.color.rgb * (ambCol + (diffuse + rim) * sunColor) * absorb;
 
     // Bioluminescence: colorful glow when underwater at night.
     // The hue for each fish is stored in p.color.a (set at spawn from its random phase).

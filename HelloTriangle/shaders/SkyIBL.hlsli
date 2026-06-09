@@ -1,4 +1,9 @@
 // SkyIBL.hlsli
+#ifndef SKYIBL_HLSLI
+#define SKYIBL_HLSLI
+
+static const float PI = 3.14159265f;
+
 // Evaluates SH9 diffuse irradiance for a surface normal N.
 // The 9 coefficients are pre-multiplied by cosine-lobe factors (A0=π, A1=2π/3, A2=π/4)
 // during IrradianceConvolveCS, so this function is a pure polynomial evaluation —
@@ -24,3 +29,5 @@ float3 EvalSH(float3 N, float4 c[9])
          + c[7].xyz * (x * z)
          + c[8].xyz * (x * x - y * y);
 }
+
+#endif // SKYIBL_HLSLI

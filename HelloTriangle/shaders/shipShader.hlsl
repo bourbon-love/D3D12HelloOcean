@@ -43,7 +43,6 @@ cbuffer ShadowCB : register(b0)
 
 static const float FFT_HEIGHT_SCALE = 1.0 / 1000.0;
 static const float GRID_WORLD_SIZE  = 400.0;
-static const float PI               = 3.14159265;
 
 float SampleWaveHeight(float2 xz)
 {

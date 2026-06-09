@@ -17,17 +17,18 @@ void FishSchool::Init(
 {
     m_device = device;
 
-    // Root signature: [0] inline CBV b0, [1] descriptor table SRV t0
+    // Root signature: [0] CBV(b0 SceneCB), [1] SRV table(t0), [2] CBV(b1 SHCB)
     {
-        CD3DX12_ROOT_PARAMETER params[2];
+        CD3DX12_ROOT_PARAMETER params[3];
         params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
 
         CD3DX12_DESCRIPTOR_RANGE srvRange;
         srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
         params[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_VERTEX);
+        params[2].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_PIXEL);
 
         CD3DX12_ROOT_SIGNATURE_DESC rsd;
-        rsd.Init(2, params, 0, nullptr,
+        rsd.Init(3, params, 0, nullptr,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
 
         ComPtr<ID3DBlob> sig, err;
@@ -351,7 +352,8 @@ void FishSchool::Update(float dt, float /*time*/)
 void FishSchool::Render(
     RenderContext& ctx,
     XMFLOAT3 sunDir, float sunIntensity, XMFLOAT3 sunColor,
-    XMFLOAT3 cameraPos, float time)
+    XMFLOAT3 cameraPos, float time,
+    D3D12_GPU_VIRTUAL_ADDRESS shcbAddr)
 {
     const int N = (int)m_fish.size();
     if (!N) return;
@@ -405,6 +407,7 @@ void FishSchool::Render(
     cmd->SetGraphicsRootConstantBufferView(0, m_sceneCB->GetGPUVirtualAddress());
     cmd->SetGraphicsRootDescriptorTable(1,
         m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+    cmd->SetGraphicsRootConstantBufferView(2, shcbAddr);
 
     cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cmd->IASetVertexBuffers(0, 1, &m_vbView);

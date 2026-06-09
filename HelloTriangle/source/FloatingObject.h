@@ -34,7 +34,8 @@ public:
     void Render(
         RenderContext& ctx,
         XMFLOAT3 sunDir, float sunIntensity, XMFLOAT3 sunColor,
-        XMFLOAT3 cameraPos);
+        XMFLOAT3 cameraPos,
+        D3D12_GPU_VIRTUAL_ADDRESS shcbAddr);
 
     // Underwater boxes (rendered before ocean surface for refraction)
     void SpawnUnderwaterBox();
@@ -42,7 +43,8 @@ public:
     int  GetUnderwaterBoxCount() const { return (int)m_uwBoxes.size(); }
     void RenderUnderwater(RenderContext& ctx,
                           XMFLOAT3 sunDir, float sunIntensity,
-                          XMFLOAT3 sunColor, XMFLOAT3 cameraPos);
+                          XMFLOAT3 sunColor, XMFLOAT3 cameraPos,
+                          D3D12_GPU_VIRTUAL_ADDRESS shcbAddr);
 
     // Shadow depth pass
     void InitShadowResources(ID3D12Device* device);

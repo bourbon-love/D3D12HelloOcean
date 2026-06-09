@@ -43,13 +43,14 @@ void FloatingObject::Init(
             m_srvHeap->GetCPUDescriptorHandleForHeapStart());
     }
 
-    // Root signature: [0] CBV(b0)  [1] SRV table(t0)
+    // Root signature: [0] CBV(b0 ObjectCB)  [1] SRV table(t0)  [2] CBV(b1 SHCB)
     {
-        CD3DX12_ROOT_PARAMETER params[2];
+        CD3DX12_ROOT_PARAMETER params[3];
         params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
         CD3DX12_DESCRIPTOR_RANGE srvRange;
         srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 1, 0);
         params[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_VERTEX);
+        params[2].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_PIXEL);
 
         CD3DX12_STATIC_SAMPLER_DESC sampler(0,
             D3D12_FILTER_MIN_MAG_MIP_LINEAR,
@@ -58,7 +59,7 @@ void FloatingObject::Init(
             D3D12_TEXTURE_ADDRESS_MODE_WRAP);
 
         CD3DX12_ROOT_SIGNATURE_DESC rsd;
-        rsd.Init(2, params, 1, &sampler,
+        rsd.Init(3, params, 1, &sampler,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
         ComPtr<ID3DBlob> sig, err;
         ThrowIfFailed(D3D12SerializeRootSignature(&rsd,
@@ -219,7 +220,8 @@ void FloatingObject::SpawnUnderwaterBox()
 void FloatingObject::RenderUnderwater(
     RenderContext& ctx,
     XMFLOAT3 sunDir, float sunIntensity,
-    XMFLOAT3 sunColor, XMFLOAT3 cameraPos)
+    XMFLOAT3 sunColor, XMFLOAT3 cameraPos,
+    D3D12_GPU_VIRTUAL_ADDRESS shcbAddr)
 {
     if (m_uwBoxes.empty()) return;
 
@@ -251,6 +253,7 @@ void FloatingObject::RenderUnderwater(
     ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
     cmd->SetDescriptorHeaps(1, heaps);
     cmd->SetGraphicsRootDescriptorTable(1, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+    cmd->SetGraphicsRootConstantBufferView(2, shcbAddr);
     cmd->SetPipelineState(m_pso.Get());
     cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cmd->IASetVertexBuffers(0, 1, &m_vbView);
@@ -271,7 +274,8 @@ void FloatingObject::RenderUnderwater(
 void FloatingObject::Render(
     RenderContext& ctx,
     XMFLOAT3 sunDir, float sunIntensity, XMFLOAT3 sunColor,
-    XMFLOAT3 cameraPos)
+    XMFLOAT3 cameraPos,
+    D3D12_GPU_VIRTUAL_ADDRESS shcbAddr)
 {
     if (m_boxes.empty()) return;
 
@@ -297,6 +301,7 @@ void FloatingObject::Render(
     ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
     cmd->SetDescriptorHeaps(1, heaps);
     cmd->SetGraphicsRootDescriptorTable(1, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+    cmd->SetGraphicsRootConstantBufferView(2, shcbAddr);
     cmd->SetPipelineState(m_pso.Get());
     cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cmd->IASetVertexBuffers(0, 1, &m_vbView);

@@ -27,7 +27,8 @@ public:
     void Render(
         RenderContext& ctx,
         XMFLOAT3 sunDir, float sunIntensity, XMFLOAT3 sunColor,
-        XMFLOAT3 cameraPos, float time);
+        XMFLOAT3 cameraPos, float time,
+        D3D12_GPU_VIRTUAL_ADDRESS shcbAddr);
 
     void SpawnSchool(int n = MAX_FISH);
     void ClearFish()         { m_fish.clear(); }
