@@ -124,7 +124,11 @@ Texture2D<float4> g_dztMap      : register(t1);
 Texture2D<float4> g_skySnapshot : register(t2);
 Texture2D<float>  g_shadowMap   : register(t3);
 Texture2D<float4> g_refraction  : register(t4); // sky + underwater objects (for refraction)
+TextureCube       g_prefilter   : register(t5);  // GGX prefiltered specular cubemap (IBL Phase C)
+Texture2D         g_brdfLUT     : register(t6);  // BRDF integration LUT (IBL Phase A)
 SamplerState g_sampler : register(s0);
+
+static const uint PREFILTER_MIPS = 6;
 
 cbuffer ShadowCB : register(b2)
 {
@@ -483,11 +487,21 @@ float4 PSMain(VSOutput pin) : SV_TARGET
         transmitted = transBody;
     }
 
+    // ---- IBL specular ambient via split-sum (Phase C) ----
+    // Water: F0=0.02, fixed roughness=0.05 (calm surface).
+    // Complements SSR reflections with off-screen / sky-facing specular.
+    float3 F0_vec = float3(F0, F0, F0);
+    float  waterRoughness = 0.05;
+    float3 prefilt   = g_prefilter.SampleLevel(g_sampler, reflectDir, waterRoughness * (PREFILTER_MIPS - 1)).rgb;
+    float2 envBRDF   = g_brdfLUT.Sample(g_sampler, float2(NdotV, waterRoughness)).rg;
+    float3 specIBL   = (F0_vec * envBRDF.x + envBRDF.y) * prefilt * cloudShad;
+
     // ---- Fresnel composite: reflection + transmission ----
     float transWeight = waterMinTrans + (1.0 - waterMinTrans) * (1.0 - fresnel);
     float3 color = fresnel * reflectSample
                  + transWeight * transmitted
                  + specularColor
+                 + specIBL
                  + diffuse * 0.30;
 
     // --- Sub-surface scattering (SSS): transmitted light at wave crests (glows blue-green against backlight) ---
