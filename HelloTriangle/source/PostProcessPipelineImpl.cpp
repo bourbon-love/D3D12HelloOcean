@@ -2,6 +2,7 @@
 #include "Renderer.h"
 #include "SkyDome.h"
 #include "FloatingObject.h"
+#include "ShipModel.h"
 #include <d3dx12_root_signature.h>
 #include <d3dx12_barriers.h>
 #include "../DXSampleHelper.h"
@@ -64,12 +65,29 @@ void PostProcessPipeline::InitSceneResources(
     ID3D12Resource* depthBuffer,
     ID3D12Resource* heightMap,
     ID3D12Resource* dztMap,
-    FloatingObject* fo)
+    FloatingObject* fo,
+    IBLSystem*      ibl)
 {
     InitSSR(heightMap, dztMap);
     InitDOF(depthBuffer);
     InitSSAO(depthBuffer);
     InitShadowMap(fo);
+
+    // Extend ocean SRV heap with IBL textures (slots 5=prefilter, 6=brdfLUT).
+    // Must be called after InitSSR which creates the heap.
+    if (ibl)
+    {
+        m_device->CopyDescriptorsSimple(1,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_oceanSRVHeap->GetCPUDescriptorHandleForHeapStart(), 5, m_oceanSRVIncrSize),
+            ibl->GetPrefilterSRVCPU(),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        m_device->CopyDescriptorsSimple(1,
+            CD3DX12_CPU_DESCRIPTOR_HANDLE(
+                m_oceanSRVHeap->GetCPUDescriptorHandleForHeapStart(), 6, m_oceanSRVIncrSize),
+            ibl->GetBRDFLutSRVCPU(),
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    }
 }
 
 // ============================================================
@@ -483,10 +501,11 @@ void PostProcessPipeline::InitSSR(ID3D12Resource* heightMap, ID3D12Resource* dzt
     }
 
     // oceanSRVHeap: [0]=heightMap [1]=dztMap [2]=skySnapshot [3]=shadowMap [4]=refractionRT
+    //               [5]=prefilter TextureCube (IBL) [6]=brdfLUT (IBL)  — slots 5/6 filled by InitSceneResources
     {
         D3D12_DESCRIPTOR_HEAP_DESC hd = {};
         hd.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        hd.NumDescriptors = 5;
+        hd.NumDescriptors = 7;
         hd.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_device->CreateDescriptorHeap(&hd, IID_PPV_ARGS(&m_oceanSRVHeap)));
         m_oceanSRVIncrSize = m_device->GetDescriptorHandleIncrementSize(
@@ -1002,7 +1021,8 @@ void PostProcessPipeline::RenderShadowMap(
     ID3D12GraphicsCommandList* cmd,
     SkyDome*        skyDome,
     Renderer*       renderer,
-    FloatingObject* fo)
+    FloatingObject* fo,
+    ShipModel*      ship)
 {
     auto dsv = m_shadowDSVHeap->GetCPUDescriptorHandleForHeapStart();
     cmd->ClearDepthStencilView(dsv, D3D12_CLEAR_FLAG_DEPTH, 1.0f, 0, 0, nullptr);
@@ -1016,9 +1036,9 @@ void PostProcessPipeline::RenderShadowMap(
         XMFLOAT3 camPos = renderer->GetCameraPos();
 
         XMVECTOR eye = XMVectorSet(
-            camPos.x - sunDir.x * 150.f,
-            camPos.y - sunDir.y * 150.f + 80.f,
-            camPos.z - sunDir.z * 150.f, 1.f);
+            camPos.x + sunDir.x * 150.f,
+            camPos.y + sunDir.y * 150.f + 80.f,
+            camPos.z + sunDir.z * 150.f, 1.f);
         XMVECTOR at  = XMVectorSet(camPos.x, 0.f, camPos.z, 0.f);
         XMVECTOR up  = fabsf(sunDir.y) > 0.98f ?
             XMVectorSet(0,0,1,0) : XMVectorSet(0,1,0,0);
@@ -1033,6 +1053,7 @@ void PostProcessPipeline::RenderShadowMap(
         cmd->RSSetViewports(1, &vp);
         cmd->RSSetScissorRects(1, &sc);
         fo->RenderDepth(cmd, m_shadowRootSig.Get(), m_shadowPSO.Get(), m_lightViewProj);
+        if (ship) ship->RenderDepth(cmd, m_lightViewProj);
     }
 
 

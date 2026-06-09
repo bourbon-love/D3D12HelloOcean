@@ -4,6 +4,7 @@
 #include <DirectXMath.h>
 #include <d3dx12_core.h>
 #include <string>
+#include "IBLSystem.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -11,6 +12,7 @@ using namespace DirectX;
 class Renderer;
 class SkyDome;
 class FloatingObject;
+class ShipModel;
 
 class PostProcessPipeline
 {
@@ -58,7 +60,8 @@ public:
         ID3D12Resource* depthBuffer,
         ID3D12Resource* heightMap,
         ID3D12Resource* dztMap,
-        FloatingObject* fo);
+        FloatingObject* fo,
+        IBLSystem*      ibl);  // for ocean SRV heap IBL slots (prefilter t5, brdfLUT t6)
 
     // Scene-side accessors
     D3D12_CPU_DESCRIPTOR_HANDLE GetHDRRTV()            const;
@@ -71,7 +74,8 @@ public:
         ID3D12GraphicsCommandList* cmd,
         SkyDome*        skyDome,
         Renderer*       renderer,
-        FloatingObject* fo);
+        FloatingObject* fo,
+        ShipModel*      ship = nullptr);
 
     // SSR snapshots
     void TakeSkySnapshot(ID3D12GraphicsCommandList* cmd);

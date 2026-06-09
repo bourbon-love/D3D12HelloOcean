@@ -134,7 +134,7 @@ void D3D12HelloTriangle::LoadAssets()
         CD3DX12_ROOT_PARAMETER rootParameters[5];
         rootParameters[0].InitAsConstantBufferView(0);
         CD3DX12_DESCRIPTOR_RANGE srvRange;
-        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 5, 0);
+        srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 7, 0);  // t0..t6: FFT maps + sky + shadow + refraction + IBL prefilter + IBL LUT
         rootParameters[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
         rootParameters[2].InitAsConstantBufferView(1);
         rootParameters[3].InitAsConstantBufferView(2);
@@ -330,7 +330,8 @@ void D3D12HelloTriangle::LoadAssets()
         m_renderer->GetDepthBuffer(),
         m_oceanFFT->GetHeightMap(),
         m_oceanFFT->GetDztMap(),
-        m_floatingObject.get());
+        m_floatingObject.get(),
+        m_iblSystem.get());
 }
 
 // ============================================================
