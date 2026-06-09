@@ -281,6 +281,7 @@ void D3D12HelloTriangle::LoadAssets()
     m_shipModel = std::make_unique<ShipModel>();
     m_shipModel->Init(
         m_device,
+        m_iblSystem.get(),
         m_oceanFFT->GetHeightMap(),
         "E:\\Study\\HelloDX12\\Assets\\dutch_ship_large_02_1k.gltf\\",
         pShipVS, shipVsLen,
