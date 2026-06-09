@@ -9,8 +9,13 @@ struct FishInstance
 };
 
 StructuredBuffer<FishInstance> g_instances : register(t0);
+TextureCube                    g_prefilter : register(t1);  // GGX prefiltered specular cubemap (IBL Phase C)
+Texture2D                      g_brdfLUT   : register(t2);  // BRDF integration LUT (IBL Phase A)
+SamplerState                   g_sampler   : register(s0);
 
 #include "SkyIBL.hlsli"
+
+static const uint PREFILTER_MIPS = 6;
 
 cbuffer SceneCB : register(b0)
 {
@@ -91,6 +96,17 @@ float4 FishPS(VSOut p) : SV_TARGET
         exp(-0.010 * depth));
 
     float3 col = p.color.rgb * (ambCol + (diffuse + rim) * sunColor) * absorb;
+
+    // Specular IBL via Karis split-sum (fish scales: roughness=0.50, F0=0.03)
+    {
+        float3 V_fish   = normalize(cameraPos - p.worldPos);
+        float3 R_fish   = reflect(-V_fish, N);
+        float  NdotV_f  = max(dot(N, V_fish), 0.0001);
+        float3 prefilt  = g_prefilter.SampleLevel(g_sampler, R_fish, 0.50 * (PREFILTER_MIPS - 1)).rgb;
+        float2 envBRDF  = g_brdfLUT.Sample(g_sampler, float2(NdotV_f, 0.50)).rg;
+        float3 F0_fish  = float3(0.03, 0.03, 0.03);
+        col += (F0_fish * envBRDF.x + envBRDF.y) * prefilt * absorb;
+    }
 
     // Bioluminescence: colorful glow when underwater at night.
     // The hue for each fish is stored in p.color.a (set at spawn from its random phase).

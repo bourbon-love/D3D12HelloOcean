@@ -11,6 +11,7 @@
 #include <vector>
 #include "../DXSampleHelper.h"
 #include "renderer/RendererContext.h"
+#include "IBLSystem.h"
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -20,6 +21,7 @@ class FloatingObject
 public:
     void Init(
         ComPtr<ID3D12Device> device,
+        IBLSystem*           ibl,
         ID3D12Resource*      heightMap,
         const UINT8* vsData, UINT vsLen,
         const UINT8* psData, UINT psLen);
@@ -94,6 +96,7 @@ private:
     D3D12_INDEX_BUFFER_VIEW      m_ibView  = {};
     UINT                         m_indexCount = 0;
 
+    IBLSystem*                   m_ibl = nullptr;
     ComPtr<ID3D12DescriptorHeap> m_srvHeap;
     ComPtr<ID3D12RootSignature>  m_rootSig;
     ComPtr<ID3D12PipelineState>  m_pso;

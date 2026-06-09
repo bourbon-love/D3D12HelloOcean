@@ -2,12 +2,16 @@
 // floating_object.hlsl
 // Floating object (wooden crate) shader.
 // Samples the height map to determine orientation along the wave surface,
-// then renders with Phong + SH9 diffuse IBL ambient.
+// then renders with Phong + SH9 diffuse IBL ambient + split-sum specular IBL.
 // ============================================================
 #include "SkyIBL.hlsli"
 
 Texture2D    g_heightMap : register(t0);
+TextureCube  g_prefilter : register(t1);  // GGX prefiltered specular cubemap (IBL Phase C)
+Texture2D    g_brdfLUT   : register(t2);  // BRDF integration LUT (IBL Phase A)
 SamplerState g_sampler   : register(s0);
+
+static const uint PREFILTER_MIPS = 6;
 
 cbuffer ObjectCB : register(b0)
 {
@@ -97,8 +101,16 @@ float4 FloatObjPS(VSOut i) : SV_Target
     float diff    = saturate(dot(N, L));
     float spec    = pow(saturate(dot(N, H)), 28.0) * 0.12;
     float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
-    float3 ambient    = irradiance / PI;
+    float3 diffAmb    = base * irradiance / PI;
 
-    float3 color = base * (ambient + diff * sunIntensity * sunColor) + spec * sunColor;
+    // Specular IBL via Karis split-sum (wet wood: roughness=0.60, F0=0.04)
+    float  NdotV       = max(dot(N, V), 0.0001);
+    float3 R           = reflect(-V, N);
+    float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, 0.60 * (PREFILTER_MIPS - 1)).rgb;
+    float2 envBRDF     = g_brdfLUT.Sample(g_sampler, float2(NdotV, 0.60)).rg;
+    float3 F0_vec      = float3(0.04, 0.04, 0.04);
+    float3 specAmb     = (F0_vec * envBRDF.x + envBRDF.y) * prefiltered;
+
+    float3 color = diffAmb + base * diff * sunIntensity * sunColor + spec * sunColor + specAmb;
     return float4(color, 1.0);
 }
