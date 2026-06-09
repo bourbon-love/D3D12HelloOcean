@@ -11,7 +11,12 @@ TextureCube  g_prefilter : register(t4);  // GGX prefiltered specular cubemap (I
 Texture2D    g_brdfLUT   : register(t5);  // BRDF integration LUT (IBL Phase A)
 SamplerState g_sampler   : register(s0);
 
-static const uint PREFILTER_MIPS = 6;
+static const uint  PREFILTER_MIPS = 6;
+// Sky radiance values are artistic HDR (midD.b = 1.05) — not physically calibrated.
+// Without scaling, SH irradiance (~3.0 blue channel) makes additive diffAmb/specAmb
+// sum to >1.0 before the direct light, washing every surface toward white after ACES.
+// 0.40 brings ambient to ~30% of direct at noon — proper fill-light ratio.
+static const float IBL_INTENSITY  = 0.40;
 
 cbuffer ShipCB : register(b0)
 {
@@ -222,12 +227,12 @@ float4 ShipPS(VSOut i) : SV_Target
 
     // Diffuse irradiance from SH9 convolution of the captured sky cubemap.
     // Coefficients are pre-multiplied by cosine-lobe factors in IrradianceConvolveCS.
-    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
+    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0) * IBL_INTENSITY;
 
     // Specular IBL via Karis split-sum (Phase C):
     // prefiltered env at reflection direction (mip = roughness) × BRDF LUT(NdotV, roughness).
     float3 R           = reflect(-V, N);
-    float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, rough * (PREFILTER_MIPS - 1)).rgb;
+    float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, rough * (PREFILTER_MIPS - 1)).rgb * IBL_INTENSITY;
     float2 envBRDF     = g_brdfLUT.Sample(g_sampler, float2(NdotV, rough)).rg;
 
     // Energy-conserving IBL ambient.
