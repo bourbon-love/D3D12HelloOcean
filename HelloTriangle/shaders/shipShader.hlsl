@@ -230,13 +230,14 @@ float4 ShipPS(VSOut i) : SV_Target
     float3 prefiltered = g_prefilter.SampleLevel(g_sampler, R, rough * (PREFILTER_MIPS - 1)).rgb;
     float2 envBRDF     = g_brdfLUT.Sample(g_sampler, float2(NdotV, rough)).rg;
 
-    // Energy-conserving ambient: reduce diffuse by the fraction taken by specular.
-    // Without this, diffAmb + specAmb double-counts for rough dielectric surfaces
-    // (envBRDF.y approaches 1 as roughness→1, adding a full sky-average white on top).
-    float3 specBRDF = F0 * envBRDF.x + envBRDF.y;
+    // Energy-conserving IBL ambient.
+    // envBRDF.y (rough-surface bias) is gated by metal: for dielectrics (metal≈0) it
+    // represents diffuse-like energy already captured by SH, so including it doubles
+    // the ambient. For metals (metal≈1) it correctly adds the conductor specular bias.
+    float3 specBRDF = F0 * envBRDF.x + envBRDF.y * metal;
     float3 kd_ibl   = (1.0 - specBRDF) * (1.0 - metal);
     float3 diffAmb  = albedo * kd_ibl * irradiance / PI * ao * cloudOcc;
-    float3 specAmb  = specBRDF * prefiltered * ao * cloudOcc * 0.35;
+    float3 specAmb  = specBRDF * prefiltered * ao * cloudOcc * 0.60;
     float3 ambient  = diffAmb + specAmb;
 
     // Lightning: brief white flash illuminating the whole ship

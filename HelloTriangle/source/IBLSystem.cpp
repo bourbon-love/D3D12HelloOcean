@@ -425,12 +425,15 @@ void IBLSystem::Dispatch(
     m_currentFace = (m_currentFace + 1) % 6;
     m_shFrameCount++;
 
-    // Convolve every 8 frames, but only after the first full 6-face cycle completes.
-    // Fires at frames 6, 14, 22, ... — 7.5x/sec at 60fps, smooth enough for sunset transitions.
-    if (m_shFrameCount >= 6 && m_shFrameCount % 8 == 6)
+    // Update SH irradiance every frame after the first full 6-face capture cycle.
+    // The 21-second day cycle means sunset lasts ~1 second at 1x speed; frame-by-frame
+    // SH updates are needed to avoid visible ambient color stepping during transitions.
+    // Prefilter (GGX convolution, heavier) updates every 6 frames — one full capture cycle.
+    if (m_shFrameCount >= 6)
     {
         DispatchIrradiance(cmdList);
-        DispatchPrefilter(cmdList);
+        if (m_shFrameCount % 6 == 0)
+            DispatchPrefilter(cmdList);
     }
 }
 

@@ -375,9 +375,10 @@ XMFLOAT3 SkyDome::GetSunColor() const
     float h = m_sunDir.y; // -1 to 1
 
     // Sunset leans toward orange-red, noon leans toward white.
-    // Use sqrt to make the transition perceptually smoother: color stays
-    // warm-white for longer, then shifts to orange near the horizon.
-    float t = sqrtf(saturate(h));
+    // Map [-0.1, 0.7] -> [0, 1] so the golden tint starts at mid-afternoon (h=0.5)
+    // rather than only near the horizon; smoothstep for a gradual perceptual curve.
+    float t = saturate((h + 0.1f) / 0.8f);
+    t = t * t * (3.0f - 2.0f * t);
     XMFLOAT3 sunsetColor = { 1.0f, 0.4f, 0.1f }; // sunset orange-red
     XMFLOAT3 noonColor = { 1.0f, 0.95f, 0.8f }; // warm white at noon
 
