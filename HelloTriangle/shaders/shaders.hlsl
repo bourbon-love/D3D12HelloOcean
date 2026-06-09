@@ -5,6 +5,8 @@
 // Jacobian foam generation, and SSR.
 // ============================================================
 //shaders.hlsl
+#include "SkyIBL.hlsli"
+
 cbuffer SceneCB : register(b0)
 {
     float4x4 view;
@@ -138,6 +140,11 @@ cbuffer ShadowCB : register(b2)
     float    waterMinTrans;  // min transmission at grazing
 };
 
+cbuffer SHCB : register(b3)
+{
+    float4 shCoeffs[9];
+    float4 _shPad[7];
+};
 
 static const float FFT_HEIGHT_SCALE = 1.0f / 1000.0f;
 static const float FFT_CHOP_SCALE = 1.0f / 1000.0f;
@@ -367,11 +374,13 @@ float4 PSMain(VSOutput pin) : SV_TARGET
     float heightFactor = saturate(pin.posW.y * 0.08f + 0.5f);
     float3 waterColor = lerp(deepColor, shallowColor, heightFactor);
 
-    // Diffuse: neutral dark at night (removes blue bias from sunColor)
+    // Diffuse: SH9 irradiance from the captured sky cubemap replaces the
+    // hand-tuned lerp(sunColor, nightAmbient, nightT).  EvalSH(N) evaluates
+    // the cosine-weighted hemisphere integral — automatically dark at night,
+    // sun-tinted at day, without explicit night transition math.
     float NdotL = saturate(dot(N, L));
-    float nightT = saturate(1.0 - sunIntensity * 3.0);   // 0=day, 1=deep night
-    float3 nightAmbient = float3(0.022, 0.024, 0.028);   // near-black with very slight blue tint
-    float3 ambLight = lerp(sunColor, nightAmbient, nightT);
+    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
+    float3 ambLight = irradiance / PI;
     // Cloud shadow: attenuates direct (NdotL) light; ambient (0.5f) stays unaffected
     float cloudShad = CloudShadow(pin.posW);
     float3 diffuse = waterColor * (NdotL * 0.5f * sunIntensity * cloudShad + 0.5f);

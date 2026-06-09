@@ -68,6 +68,7 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <button class="nav-btn" onclick="navTo('s5',this)">⑤ Phase A 総括</button>
   <button class="nav-btn" onclick="navTo('s6',this)">⑥ SH 畳み込み</button>
   <button class="nav-btn" onclick="navTo('s7',this)">⑦ 読み返しレイテンシ</button>
+  <button class="nav-btn" onclick="navTo('s8',this)">⑧ 全面EvalSH展開</button>
 </nav>
 
 <!-- ══════════════ S1: 为什么程序化天空能跳过 cubemap 光栅化 ══════════════ -->
@@ -374,6 +375,43 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
     m_shFrameCount++;<br>
     <b>if</b> (m_shFrameCount &gt;= 6 &amp;&amp; m_shFrameCount % 30 == 6)<br>
     &nbsp;&nbsp;DispatchIrradiance(cmdList);  <em>// 6, 36, 66, … フレーム目</em>
+  </div>
+</section>
+
+<!-- ─── Section 8: B5 EvalSH rollout ─────────────────────────────────────── -->
+<section class="section" id="s8">
+  <h2>⑧ 全サーフェスへの EvalSH 展開 — Phase B 完了</h2>
+  <p>SH9 アンビエントを Ship だけでなく Ocean・FloatingObject・Fish の4サーフェス全体に適用。
+  各シェーダーが <code>SkyIBL.hlsli</code> を include し、対応する DX12 バインドを追加することで
+  シーン全体が同一の物理ベースアンビエントを共有する。</p>
+
+  <h3>変更マトリクス</h3>
+  <canvas id="c8" width="700" height="260" style="width:100%;border-radius:8px;display:block;margin:16px 0"></canvas>
+
+  <h3>EvalSH コスト vs. 旧定数アンビエント</h3>
+  <div class="formula">
+    <b>旧アンビエント</b>：<code>float ambient = 0.28;</code>  → 1 定数代入<br>
+    <b>EvalSH</b>：9 MAD 命令＋定数バッファ 9×float4 ロード<br>
+    <em>ピクセルシェーダーの命令コスト増は最小限。アンビエント品質は空の実際の色に追従。</em>
+  </div>
+
+  <h3>ルートシグネチャ変更</h3>
+  <div class="formula">
+    <b>Ocean (shaders.hlsl)</b>：スロット 4 → CBV(b3) SHCB<br>
+    <b>FloatingObject</b>：スロット 2 → CBV(b1) SHCB<br>
+    <b>FishSchool</b>：スロット 2 → CBV(b1) SHCB<br>
+    <b>ShipModel</b>：スロット 2 → CBV(b1) SHCB（Section 6 で完了）
+  </div>
+
+  <h3>Phase B 完了 — アンビエント統一フロー</h3>
+  <div class="formula">
+    IrradianceConvolveCS<br>
+    &nbsp;&nbsp;↓ GPU が SH9 を 144 bytes DEFAULT buffer に書き込み<br>
+    CopyResource → READBACK staging<br>
+    &nbsp;&nbsp;↓ 1フレーム遅延（WaitForPreviousFrame 後に安全）<br>
+    ReadbackSH() → memcpy → SHCB UPLOAD 永続マップ<br>
+    &nbsp;&nbsp;↓ 全サーフェス SetGraphicsRootConstantBufferView<br>
+    EvalSH(N, shCoeffs) / PI → 物理ベース拡散アンビエント
   </div>
 </section>
 
@@ -1142,7 +1180,76 @@ window.addEventListener('load', () => {
     drawS7();
   });
   drawS7();
+
+  const c8 = document.getElementById('c8');
+  let ctx8 = initCanvas(c8);
+  drawS8();
 });
+
+// ─── Section 8: EvalSH rollout matrix ────────────────────────────────────────
+function drawS8() {
+  const c8 = document.getElementById('c8');
+  const ctx8 = initCanvas(c8);
+  const W = c8.width, H = c8.height;
+
+  const cols = ['シェーダー', 'include SkyIBL', 'SHCB cbuffer', 'ルートスロット', '旧アンビエント', '新アンビエント'];
+  const rows = [
+    ['shaders.hlsl\n(Ocean)',      '✓', 'b3', 'slot 4', 'float 0.28', 'EvalSH(N)/π'],
+    ['floating_object.hlsl',       '✓', 'b1', 'slot 2', 'float 0.28', 'EvalSH(N)/π'],
+    ['fish.hlsl',                  '✓', 'b1', 'slot 2', 'float 0.35', 'EvalSH(N)/π'],
+    ['shipShader.hlsl',            '✓', 'b1', 'slot 2', '手調整定数', 'EvalSH(N)/π'],
+  ];
+
+  const PAD = 10;
+  const colW = (W - PAD * 2) / cols.length;
+  const rowH = (H - PAD * 2 - 28) / (rows.length + 1);
+  const accent = '#5b9bd5';
+  const green  = '#4caf8a';
+  const muted  = '#888';
+
+  // header
+  ctx8.fillStyle = accent;
+  ctx8.fillRect(PAD, PAD, W - PAD * 2, rowH);
+  ctx8.fillStyle = '#fff';
+  ctx8.font = `bold ${Math.max(9, rowH * 0.44)}px monospace`;
+  ctx8.textAlign = 'center';
+  ctx8.textBaseline = 'middle';
+  cols.forEach((c, i) => {
+    ctx8.fillText(c, PAD + i * colW + colW / 2, PAD + rowH / 2);
+  });
+
+  // rows
+  rows.forEach((row, ri) => {
+    const y = PAD + (ri + 1) * rowH;
+    ctx8.fillStyle = ri % 2 === 0 ? '#1e2330' : '#252b3a';
+    ctx8.fillRect(PAD, y, W - PAD * 2, rowH);
+
+    row.forEach((cell, ci) => {
+      let color = '#ccc';
+      if (ci === 1 && cell === '✓') color = green;
+      if (ci === 5) color = green;
+      if (ci === 4) color = muted;
+      ctx8.fillStyle = color;
+      ctx8.font = `${Math.max(8, rowH * 0.40)}px monospace`;
+      // handle multi-line (shader names with \n)
+      const lines = cell.split('\n');
+      if (lines.length > 1) {
+        lines.forEach((line, li) => {
+          ctx8.fillText(line, PAD + ci * colW + colW / 2,
+            y + rowH / 2 + (li - 0.5) * rowH * 0.38);
+        });
+      } else {
+        ctx8.fillText(cell, PAD + ci * colW + colW / 2, y + rowH / 2);
+      }
+    });
+  });
+
+  // caption
+  ctx8.fillStyle = muted;
+  ctx8.font = `${Math.max(9, 11)}px sans-serif`;
+  ctx8.textAlign = 'center';
+  ctx8.fillText('全4サーフェスが SkyIBL.hlsli 経由で同一 EvalSH を呼び出す', W / 2, H - 6);
+}
 
 window.addEventListener('resize', () => {
   ctx1 = initCanvas(c1);
@@ -1156,6 +1263,7 @@ window.addEventListener('resize', () => {
   drawS5();
   drawS6();
   drawS7();
+  drawS8();
 });
 </script>
 </body>

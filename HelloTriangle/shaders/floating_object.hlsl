@@ -2,8 +2,10 @@
 // floating_object.hlsl
 // Floating object (wooden crate) shader.
 // Samples the height map to determine orientation along the wave surface,
-// then renders with Phong lighting.
+// then renders with Phong + SH9 diffuse IBL ambient.
 // ============================================================
+#include "SkyIBL.hlsli"
+
 Texture2D    g_heightMap : register(t0);
 SamplerState g_sampler   : register(s0);
 
@@ -18,6 +20,12 @@ cbuffer ObjectCB : register(b0)
     float   gridWorldSize;  // typically 400.0
     float3  cameraPos;
     float   dropOffset; // Y offset above wave surface during fall
+};
+
+cbuffer SHCB : register(b1)
+{
+    float4 shCoeffs[9];
+    float4 _shPad[7];
 };
 
 struct VSIn  { float3 pos : POSITION; float3 normal : NORMAL; };
@@ -76,7 +84,7 @@ VSOut FloatObjVS(VSIn v)
 float4 FloatObjPS(VSOut i) : SV_Target
 {
     float3 N = normalize(i.wNormal);
-    float3 L = normalize(-sunDir);
+    float3 L = normalize(sunDir);
     float3 V = normalize(cameraPos - i.wPos);
     float3 H = normalize(L + V);
 
@@ -88,8 +96,9 @@ float4 FloatObjPS(VSOut i) : SV_Target
 
     float diff    = saturate(dot(N, L));
     float spec    = pow(saturate(dot(N, H)), 28.0) * 0.12;
-    float ambient = 0.28;
+    float3 irradiance = max(EvalSH(N, shCoeffs), 0.0);
+    float3 ambient    = irradiance / PI;
 
-    float3 color = base * (ambient + diff * sunIntensity) * sunColor + spec * sunColor;
+    float3 color = base * (ambient + diff * sunIntensity * sunColor) + spec * sunColor;
     return float4(color, 1.0);
 }
