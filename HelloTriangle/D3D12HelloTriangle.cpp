@@ -164,6 +164,14 @@ void D3D12HelloTriangle::LoadAssets()
     m_oceanFFT->Init(m_device, m_commandQueue, 256,
         pPhillips, phillipsLen, pTimeEvo, timeEvoLen, pIFFT, ifftLen);
 
+    UINT8 *pSkyCaptureCS = nullptr, *pBRDFLutCS = nullptr;
+    UINT   skyCaptureLen = 0, brdfLutLen = 0;
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"SkyCaptureCS.cso").c_str(), &pSkyCaptureCS, &skyCaptureLen));
+    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"BRDFLutCS.cso").c_str(),   &pBRDFLutCS,    &brdfLutLen));
+    m_iblSystem = std::make_unique<IBLSystem>();
+    m_iblSystem->Init(m_device, m_commandQueue, 64, 128,
+        pSkyCaptureCS, skyCaptureLen, pBRDFLutCS, brdfLutLen);
+
 
     UINT8 *pVS = nullptr, *pPS = nullptr, *pBoxVS = nullptr, *pBoxPS = nullptr;
     UINT   vsLen = 0, psLen = 0, boxVsLen = 0, boxPsLen = 0;
@@ -331,6 +339,10 @@ void D3D12HelloTriangle::OnUpdate()
         m_shipModel->Update(scaledDt, hs.h0, hs.hBow, hs.hSide);
     }
 
+    // Auto-orbit around the ship in ship-orbit mode
+    if (m_renderer->IsShipOrbitMode())
+        m_renderer->GetCamera().UpdateShipOrbit(scaledDt, m_shipModel->worldPos);
+
     // Moisture accumulates during rain, decays ~50s after rain stops
     {
         constexpr float kAccum = 0.5f;
@@ -479,8 +491,9 @@ void D3D12HelloTriangle::BuildImGuiUI()
     ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "Camera");
     ImGui::SliderFloat("Vignette",   &m_pp->vignetteStrength, 0.0f, 1.5f,  "%.2f");
     ImGui::SliderFloat("Film Grain", &m_pp->grainStrength,    0.0f, 0.08f, "%.3f");
-    if (m_renderer->IsShowcaseMode())
+    if (m_renderer->IsShowcaseMode() || m_renderer->IsShipOrbitMode())
     {
+        // Shared by both orbit modes (Showcase / Ship Orbit are mutually exclusive)
         float& h = m_renderer->GetCamera().m_showcaseHeight;
         float& s = m_renderer->GetCamera().m_showcaseSpeed;
         ImGui::SliderFloat("Cam Height", &h, -15.0f, 40.0f,  "%.1f m");
@@ -591,14 +604,29 @@ void D3D12HelloTriangle::BuildImGuiUI()
     ImGui::SetNextItemWidth(80.0f);
     ImGui::SliderFloat("##ts", &m_timeScale, 0.0f, 10.0f, "%.1fx");
 
-    // Group 1 — Showcase
+    // Group 1 — Showcase / Ship Orbit (mutually exclusive)
     NextGroup(1);
-    bool showcase = m_renderer->IsShowcaseMode();
+    bool showcase  = m_renderer->IsShowcaseMode();
+    bool shipOrbit = m_renderer->IsShipOrbitMode();
     ImGui::TextDisabled("View"); ImGui::SameLine();
     if (ImGui::Button(showcase ? "Showcase ON " : "Showcase OFF"))
     {
         if (showcase) { m_renderer->ToggleShowcase(); m_renderer->GetCamera().ExitShowcase(); }
-        else          { m_renderer->ToggleShowcase(); m_renderer->GetCamera().EnterShowcase(); }
+        else
+        {
+            if (shipOrbit) { m_renderer->ToggleShipOrbit(); m_renderer->GetCamera().ExitShipOrbit(); }
+            m_renderer->ToggleShowcase(); m_renderer->GetCamera().EnterShowcase();
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button(shipOrbit ? "Ship Orbit ON " : "Ship Orbit OFF"))
+    {
+        if (shipOrbit) { m_renderer->ToggleShipOrbit(); m_renderer->GetCamera().ExitShipOrbit(); }
+        else
+        {
+            if (showcase) { m_renderer->ToggleShowcase(); m_renderer->GetCamera().ExitShowcase(); }
+            m_renderer->ToggleShipOrbit(); m_renderer->GetCamera().EnterShipOrbit();
+        }
     }
 
     // Group 2 — Weather
@@ -690,6 +718,11 @@ void D3D12HelloTriangle::OnRender()
     };
     m_commandList->ResourceBarrier(2, toSRV);
 
+    // ---- Compute: IBL sky capture (rolling 6-frame cycle) ----
+    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(100, 180, 255), L"IBL Capture");
+    m_iblSystem->Dispatch(m_commandList, m_skyDome.get(), m_renderer->GetTime());
+    PIXEndEvent(m_commandList.Get());
+
     // ---- ShadowMap ----
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(80, 80, 80), L"ShadowMap");
     m_pp->RenderShadowMap(m_commandList.Get(), m_skyDome.get(), m_renderer.get(),
@@ -765,13 +798,22 @@ void D3D12HelloTriangle::OnRender()
     m_commandList->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
 
     // ---- Underwater (FloatingObject + Fish) ----
+    // Both read lighting through SkyDome's unified sun/moon-blended light (see
+    // SkyDome::GetActiveLight*) instead of raw sun-only values:
+    //  - FloatingObject previously went fully dark at night (sunIntensity -> 0, no
+    //    moonlight contribution); now it stays moonlit like everything else.
+    //  - FishSchool's bioluminescence tuning (fish.hlsl:90-92) was already written
+    //    assuming the incoming intensity bottoms out at the moon's 0.15 ("nightBlend
+    //    = 0.55 at night"), but was actually receiving raw GetSunIntensity() (bottoms
+    //    out at 0, giving nightBlend = 1.0) — passing the blended intensity makes the
+    //    effect match its own tuning comment.
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(0, 180, 160), L"Underwater");
     m_floatingObject->RenderUnderwater(ctx,
-        m_skyDome->GetSunDirection(), m_skyDome->GetSunIntensity(),
-        m_skyDome->GetSunColor(), m_renderer->GetCameraPos());
+        m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
+        m_skyDome->GetActiveLightColor(), m_renderer->GetCameraPos());
     m_fishSchool->Render(ctx,
-        m_skyDome->GetSunDirection(), m_skyDome->GetSunIntensity(),
-        m_skyDome->GetSunColor(), m_renderer->GetCameraPos(), m_renderer->GetTime());
+        m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
+        m_skyDome->GetActiveLightColor(), m_renderer->GetCameraPos(), m_renderer->GetTime());
     PIXEndEvent(m_commandList.Get());
 
     m_pp->TakeRefractionSnapshot(m_commandList.Get());
@@ -791,8 +833,8 @@ void D3D12HelloTriangle::OnRender()
     m_renderer->Render(ctx);
     // RenderWaterBox is for single-tile boundary box only; hidden in infinite ocean mode
     m_floatingObject->Render(ctx,
-        m_skyDome->GetSunDirection(), m_skyDome->GetSunIntensity(),
-        m_skyDome->GetSunColor(), m_renderer->GetCameraPos());
+        m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
+        m_skyDome->GetActiveLightColor(), m_renderer->GetCameraPos());
     PIXEndEvent(m_commandList.Get());
 
     // ---- Ship ----
@@ -804,11 +846,14 @@ void D3D12HelloTriangle::OnRender()
         m_renderer->GetCloudWindX(),       m_renderer->GetCloudWindZ(),
         m_renderer->GetCloudDensityMult(), m_renderer->GetCloudEnabled()
     };
+    // Single light source, smoothly blended between sun and moon by SkyDome
+    // (see SkyDome::GetActiveLight* — keeps the ship's lighting in sync with the ocean
+    // and prevents two simultaneously-active lights from opposite directions, which used
+    // to leak "moonlight" onto the sunlit side of the hull at full daylight).
     m_shipModel->Render(ctx,
-        m_skyDome->GetSunDirection(), m_skyDome->GetSunIntensity(),
-        m_skyDome->GetSunColor(),     m_renderer->GetCameraPos(),
-        m_skyDome->GetMoonDirection(), m_skyDome->GetMoonIntensity(),
-        m_skyDome->GetMoonColor(),    m_skyDome->GetLightningIntensity(),
+        m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
+        m_skyDome->GetActiveLightColor(),     m_renderer->GetCameraPos(),
+        m_skyDome->GetLightningIntensity(),
         shipCloud);
     // Restore ocean root signature and SRV heap after ship changes them
     m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
@@ -934,7 +979,11 @@ void D3D12HelloTriangle::OnKeyDown(UINT8 key)
         if (m_renderer->IsShowcaseMode())
         { m_renderer->ToggleShowcase(); m_renderer->GetCamera().ExitShowcase(); }
         else
-        { m_renderer->ToggleShowcase(); m_renderer->GetCamera().EnterShowcase(); }
+        {
+            if (m_renderer->IsShipOrbitMode())
+            { m_renderer->ToggleShipOrbit(); m_renderer->GetCamera().ExitShipOrbit(); }
+            m_renderer->ToggleShowcase(); m_renderer->GetCamera().EnterShowcase();
+        }
     }
     if (key == '1') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Calm,    10.0f); }
     if (key == '2') { m_weatherSystem->SetAutoWeather(false); m_weatherSystem->SetWeather(WeatherState::Windy,   10.0f); }
