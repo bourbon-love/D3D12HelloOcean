@@ -55,20 +55,21 @@ void ShipModel::Init(
         m_shadowCB->Map(0, &r, reinterpret_cast<void**>(&m_mappedShadowCB));
     }
 
-    // Main root signature: [0]=CBV(b0), [1]=Table(4 SRVs: t0..t3), sampler s0
+    // Main root signature: [0]=CBV(b0 ShipCB), [1]=Table(4 SRVs: t0..t3), [2]=CBV(b1 SHCB)
     {
-        CD3DX12_ROOT_PARAMETER params[2];
+        CD3DX12_ROOT_PARAMETER params[3];
         params[0].InitAsConstantBufferView(0, 0, D3D12_SHADER_VISIBILITY_ALL);
         CD3DX12_DESCRIPTOR_RANGE srvRange;
         srvRange.Init(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 4, 0);
         params[1].InitAsDescriptorTable(1, &srvRange, D3D12_SHADER_VISIBILITY_ALL);
+        params[2].InitAsConstantBufferView(1, 0, D3D12_SHADER_VISIBILITY_PIXEL);
         CD3DX12_STATIC_SAMPLER_DESC sampler(0,
             D3D12_FILTER_MIN_MAG_MIP_LINEAR,
             D3D12_TEXTURE_ADDRESS_MODE_WRAP,
             D3D12_TEXTURE_ADDRESS_MODE_WRAP,
             D3D12_TEXTURE_ADDRESS_MODE_WRAP);
         CD3DX12_ROOT_SIGNATURE_DESC rsd;
-        rsd.Init(2, params, 1, &sampler,
+        rsd.Init(3, params, 1, &sampler,
             D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
         ComPtr<ID3DBlob> sig, err;
         ThrowIfFailed(D3D12SerializeRootSignature(&rsd,
@@ -534,11 +535,11 @@ void ShipModel::Update(float dt, float h0, float hBow, float hSide)
 
 void ShipModel::Render(
     RenderContext& ctx,
-    XMFLOAT3 sunDir,    float sunIntensity,
-    XMFLOAT3 sunColor,  XMFLOAT3 cameraPos,
-    XMFLOAT3 moonDir,   float moonIntensity,
-    XMFLOAT3 moonColor, float lightningIntensity,
-    const ShipCloudParams& cloud)
+    XMFLOAT3 lightDir,   float lightIntensity,
+    XMFLOAT3 lightColor, XMFLOAT3 cameraPos,
+    float lightningIntensity,
+    const ShipCloudParams& cloud,
+    D3D12_GPU_VIRTUAL_ADDRESS shcbAddr)
 {
     XMMATRIX vp = XMMatrixTranspose(ctx.view * ctx.proj);
 
@@ -546,14 +547,11 @@ void ShipModel::Render(
     cb.viewProj             = vp;
     cb.worldPos             = worldPos;
     cb.scale                = scale;
-    cb.sunDir               = sunDir;
-    cb.sunIntensity         = sunIntensity;
-    cb.sunColor             = sunColor;
+    cb.lightDir             = lightDir;
+    cb.lightIntensity       = lightIntensity;
+    cb.lightColor           = lightColor;
     cb.yaw                  = yaw;
     cb.cameraPos            = cameraPos;
-    cb.moonDir              = moonDir;
-    cb.moonIntensity        = moonIntensity;
-    cb.moonColor            = moonColor;
     cb.lightningIntensity   = lightningIntensity;
     cb.time                 = cloud.time;
     cb.cloudCoverage        = cloud.coverage;
@@ -571,6 +569,7 @@ void ShipModel::Render(
     cmd->SetGraphicsRootSignature(m_rootSig.Get());
     cmd->SetPipelineState(m_pso.Get());
     cmd->SetGraphicsRootConstantBufferView(0, m_cb->GetGPUVirtualAddress());
+    cmd->SetGraphicsRootConstantBufferView(2, shcbAddr);  // b1 SHCB for EvalSH
     cmd->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     cmd->OMSetRenderTargets(1, &ctx.rtv, FALSE, &ctx.dsv);
     cmd->RSSetViewports(1, &ctx.viewport);

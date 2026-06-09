@@ -67,6 +67,7 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <button class="nav-btn" onclick="navTo('s4',this)">④ ローリング更新</button>
   <button class="nav-btn" onclick="navTo('s5',this)">⑤ Phase A 総括</button>
   <button class="nav-btn" onclick="navTo('s6',this)">⑥ SH 畳み込み</button>
+  <button class="nav-btn" onclick="navTo('s7',this)">⑦ 読み返しレイテンシ</button>
 </nav>
 
 <!-- ══════════════ S1: 为什么程序化天空能跳过 cubemap 光栅化 ══════════════ -->
@@ -316,6 +317,63 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
     天空の昼夜・天候変化のような滑らかな明暗は完璧に捉えられる。
     9係数 × 3ch = 27 float（108 bytes）は定数バッファの1スロット（256 bytes）に収まり、
     追加テクスチャ不要で評価できる。積分は cubemap 全テクセルを一度だけ舐めれば済む（〜30フレームに1回で十分）。
+  </div>
+</section>
+
+<!-- ══════════════ S7: GPU readback latency ══════════════ -->
+<section class="section" id="s7">
+  <h2><span class="sec-num">7</span>GPU ステージング読み返し — 1フレーム遅延の仕組み</h2>
+  <p class="subtitle">
+    IrradianceConvolveCS の出力（DEFAULT ヒープ）は CPU から直接読めない。
+    READBACK ヒープにコピーしてから、次フレームの OnUpdate 先頭で安全に読む。
+  </p>
+
+  <div class="formula">
+    <span>DEFAULT</span> → <em>[UAV barrier]</em> → <span>COPY_SOURCE</span> →
+    <b>CopyResource</b>(<em>staging</em>, <em>shOutput</em>) → <span>UAV restore</span>
+    <br>
+    <em>// 翌フレームの OnUpdate 先頭:</em><br>
+    <b>ReadbackSH</b>() : <em>m_shStagingMapped</em> → <span>memcpy</span> → <em>m_shCBMapped</em>
+  </div>
+
+  <p style="font-size:13.5px;color:var(--text2);margin:8px 0 14px">
+    下のタイムラインを動かして、GPU ディスパッチ → ステージングコピー → CPU 読み取り が
+    <strong>1フレームずれる</strong>理由を確認する。
+  </p>
+
+  <div class="canvas-wrap">
+    <canvas id="c7" height="200"></canvas>
+    <div class="canvas-label">ReadbackSH タイムライン</div>
+  </div>
+
+  <div class="controls">
+    <div class="ctrl-group">
+      <label>表示フレーム <span id="v7frame">0</span></label>
+      <input type="range" id="r7frame" min="0" max="5" step="1" value="0">
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <button class="btn" id="btn7play" onclick="toggleS7Play()">▶ 自動再生</button>
+    </div>
+  </div>
+
+  <div class="stats-row">
+    <div class="stat-card"><div class="stat-val" id="s7gpu">—</div><div class="stat-lbl">GPU ディスパッチ</div></div>
+    <div class="stat-card"><div class="stat-val" id="s7copy">—</div><div class="stat-lbl">ステージングコピー</div></div>
+    <div class="stat-card"><div class="stat-val" id="s7cpu">—</div><div class="stat-lbl">CPU 読み取り</div></div>
+    <div class="stat-card"><div class="stat-val" id="s7safe">—</div><div class="stat-lbl">安全性</div></div>
+  </div>
+
+  <div class="insight">
+    <code>WaitForPreviousFrame()</code> は OnRender の末尾で呼ばれる。
+    これにより翌フレームの <code>ReadbackSH()</code> 到達時点で GPU は確実に完了している。
+    「1フレーム遅れ」でも SH 係数は数十フレームに1回しか更新しないため、知覚できない。
+  </div>
+
+  <div class="formula">
+    <em>// IBLSystem::Dispatch() 末尾：</em><br>
+    m_shFrameCount++;<br>
+    <b>if</b> (m_shFrameCount &gt;= 6 &amp;&amp; m_shFrameCount % 30 == 6)<br>
+    &nbsp;&nbsp;DispatchIrradiance(cmdList);  <em>// 6, 36, 66, … フレーム目</em>
   </div>
 </section>
 
@@ -666,8 +724,15 @@ function drawS3(){
 
 // ─── S6: SH basis function visualizer (equirectangular projection) ──────────
 const c6 = document.getElementById('c6');
+const c7 = document.getElementById('c7');
 let ctx6;
 let s6Basis = 0;
+
+// S7
+let ctx7;
+let s7Frame = 0;
+let s7Playing = false;
+let s7Timer = null;
 // SH basis functions Y_i(x,y,z): same order as IrradianceConvolveCS.hlsl
 const SH_BASIS = [
   (x,y,z) =>  0.282095,                          // Y00
@@ -934,6 +999,110 @@ function tickS4(){
   drawS4();
 }
 
+// ─── S7: GPU staging readback timeline ───────────────────────────────────────
+function drawS7(){
+  if(!ctx7) return;
+  const cw=W(c7), ch=H(c7);
+  ctx7.clearRect(0,0,cw,ch);
+
+  const NFRAMES = 6;
+  const padL=90, padR=24, padT=24, padB=36;
+  const fW = (cw-padL-padR)/NFRAMES;
+  const rowH = (ch-padT-padB)/3;
+
+  // Row labels
+  ctx7.font = '11px sans-serif';
+  ctx7.fillStyle = '#8b949e';
+  ctx7.textAlign = 'right';
+  const rowLabels = ['GPU ディスパッチ','ステージング copy','CPU ReadbackSH'];
+  for(let r=0;r<3;r++)
+    ctx7.fillText(rowLabels[r], padL-6, padT+r*rowH+rowH/2+4);
+
+  // Frame column backgrounds
+  for(let f=0;f<NFRAMES;f++){
+    const x = padL + f*fW;
+    ctx7.fillStyle = f===s7Frame ? 'rgba(88,166,255,.06)' : 'rgba(255,255,255,.02)';
+    ctx7.fillRect(x, padT, fW, ch-padT-padB);
+    // frame label
+    ctx7.fillStyle = f===s7Frame ? '#58a6ff' : '#8b949e';
+    ctx7.textAlign='center'; ctx7.font='11px sans-serif';
+    ctx7.fillText('F'+f, x+fW/2, ch-padB+16);
+  }
+
+  // Define events per frame
+  // Row 0: GPU dispatch (IrradianceConvolveCS fires every 30 frames; simplified: show at frame 0)
+  // Row 1: Staging copy (happens same frame as dispatch, end-of-frame)
+  // Row 2: CPU ReadbackSH (happens frame AFTER dispatch)
+  const dispatchFrames  = [0, 3];  // simplified: show dispatch at frames 0 and 3
+  const copyFrames      = [0, 3];
+  const readbackFrames  = [1, 4];  // always one frame after dispatch
+
+  function drawBar(row, frame, label, color){
+    const x = padL + frame*fW + fW*0.08;
+    const y = padT + row*rowH + rowH*0.15;
+    const bw = fW*0.84, bh = rowH*0.70;
+    ctx7.fillStyle = color;
+    ctx7.beginPath();
+    ctx7.roundRect(x,y,bw,bh,4);
+    ctx7.fill();
+    ctx7.fillStyle = '#e6edf3';
+    ctx7.font='10px sans-serif';
+    ctx7.textAlign='center';
+    ctx7.fillText(label, x+bw/2, y+bh/2+3);
+  }
+
+  dispatchFrames.forEach(f => drawBar(0, f, 'Dispatch(1,1,1)', '#bc8cff'));
+  copyFrames.forEach(f    => drawBar(1, f, 'CopyResource', '#2ea9af'));
+  readbackFrames.forEach(f=> drawBar(2, f, 'memcpy→SHCB', '#3fb950'));
+
+  // Arrow: copy → readback (1 frame delay)
+  dispatchFrames.forEach(f => {
+    if(f+1 < NFRAMES){
+      const x1 = padL+(f+1)*fW-fW*0.08;
+      const y1 = padT+rowH*1+rowH*0.85;
+      const x2 = padL+(f+1)*fW+fW*0.08;
+      const y2 = padT+rowH*2+rowH*0.15;
+      ctx7.strokeStyle='rgba(255,255,255,.3)'; ctx7.lineWidth=1; ctx7.setLineDash([3,3]);
+      ctx7.beginPath(); ctx7.moveTo(x1,y1); ctx7.lineTo(x2,y2); ctx7.stroke();
+      ctx7.setLineDash([]);
+    }
+  });
+
+  // Wait fence marker at end of each frame
+  for(let f=0;f<NFRAMES;f++){
+    const x = padL+(f+1)*fW-1;
+    ctx7.strokeStyle='rgba(230,172,65,.5)'; ctx7.lineWidth=1.5; ctx7.setLineDash([2,3]);
+    ctx7.beginPath(); ctx7.moveTo(x,padT); ctx7.lineTo(x,ch-padB); ctx7.stroke();
+    ctx7.setLineDash([]);
+  }
+
+  // Current frame highlight
+  const cf = s7Frame;
+  // Update stat cards
+  const isDispatch = dispatchFrames.includes(cf);
+  const isCopy     = copyFrames.includes(cf);
+  const isReadback = readbackFrames.includes(cf);
+  setTxt('s7gpu',  isDispatch ? 'F'+cf : '—');
+  setTxt('s7copy', isCopy     ? 'F'+cf : '—');
+  setTxt('s7cpu',  isReadback ? 'F'+cf+' ✓' : '—');
+  setTxt('s7safe', isReadback ? '安全 ✓' : (isDispatch ? '書き込み中' : '待機'));
+}
+
+function toggleS7Play(){
+  s7Playing = !s7Playing;
+  document.getElementById('btn7play').textContent = s7Playing ? '⏸ 停止' : '▶ 自動再生';
+  if(s7Playing){
+    s7Timer = setInterval(() => {
+      s7Frame = (s7Frame+1) % 6;
+      document.getElementById('r7frame').value = s7Frame;
+      setTxt('v7frame', s7Frame);
+      drawS7();
+    }, 600);
+  } else {
+    clearInterval(s7Timer);
+  }
+}
+
 window.addEventListener('load', () => {
   ctx1 = initCanvas(c1);
   ctx2 = initCanvas(c2);
@@ -941,6 +1110,7 @@ window.addEventListener('load', () => {
   ctx4 = initCanvas(c4);
   ctx5 = initCanvas(c5);
   ctx6 = initCanvas(c6);
+  ctx7 = initCanvas(c7);
 
   bind('r1t', 'v1t', v => fmtClock(+v), v => { s1.t = v; });
   const r1t = document.getElementById('r1t');
@@ -965,6 +1135,13 @@ window.addEventListener('load', () => {
   s4AnimTimer = setInterval(tickS4, 400);
   drawS5();
   setShBasis(0);
+
+  bind('r7frame', 'v7frame', v => String(Math.round(+v)), v => {
+    s7Frame = Math.round(+v);
+    if(s7Playing){ s7Playing=false; clearInterval(s7Timer); document.getElementById('btn7play').textContent='▶ 自動再生'; }
+    drawS7();
+  });
+  drawS7();
 });
 
 window.addEventListener('resize', () => {
@@ -974,9 +1151,11 @@ window.addEventListener('resize', () => {
   ctx4 = initCanvas(c4);
   ctx5 = initCanvas(c5);
   ctx6 = initCanvas(c6);
+  ctx7 = initCanvas(c7);
   drawS4();
   drawS5();
   drawS6();
+  drawS7();
 });
 </script>
 </body>
