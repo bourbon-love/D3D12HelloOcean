@@ -65,6 +65,7 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
   <button class="nav-btn" onclick="navTo('s2',this)">② 方向→面映射</button>
   <button class="nav-btn" onclick="navTo('s3',this)">③ split-sum BRDF</button>
   <button class="nav-btn" onclick="navTo('s4',this)">④ ローリング更新</button>
+  <button class="nav-btn" onclick="navTo('s5',this)">⑤ Phase A 総括</button>
 </nav>
 
 <!-- ══════════════ S1: 为什么程序化天空能跳过 cubemap 光栅化 ══════════════ -->
@@ -219,6 +220,53 @@ code{font-family:'Courier New',monospace;color:var(--accent2);background:rgba(11
     6帧约 0.1 秒的陈旧度完全不可察觉。<br>
     若换成快速变化的光源（爆炸、快速旋转的聚光灯），这个技巧就不再成立——
     那种场景必须每帧更新全部 6 面，或改用预滤波球谐代替 cubemap。
+  </div>
+</section>
+
+<!-- ══════════════ S5: Phase A 总结 ══════════════ -->
+<section class="section" id="s5">
+  <h2><span class="sec-num">5</span>デバッグプレビューが証明すること — Phase A 総括</h2>
+  <p class="subtitle">Phase A の「受け入れ基準」は ImGui のデバッグウィンドウ1枚。6面それぞれが正しい方向の空を捕らえていることを目視で確認する。</p>
+
+  <div class="canvas-wrap">
+    <canvas id="c5" height="260"></canvas>
+    <div class="canvas-label">展開図（横十字）：各面が写すべきもの。赤枠 = 正しく確認できた面</div>
+  </div>
+  <div class="controls">
+    <div class="ctrl-group">
+      <label>太陽高度<span id="v5sun">0.50</span></label>
+      <input type="range" id="r5sun" min="-0.3" max="1.0" step="0.01" value="0.50">
+    </div>
+  </div>
+
+  <div class="compare-col" style="margin-top:12px">
+    <div class="compare-step">
+      <strong>✔ +Y 面（天頂）</strong><br>
+      昼：青い天空。夜：星野。正確なグラジエントが見えれば <code>FaceUVToDirection</code> の Y 軸は正しい。
+    </div>
+    <div class="compare-step">
+      <strong>✔ 太陽がいる面</strong><br>
+      太陽の輝点が in-game の方向と一致するか。回転・鏡像があれば case 0/4/5 の符号ミス。
+    </div>
+    <div class="compare-step">
+      <strong>✔ BRDF LUT</strong><br>
+      左下 (NdotV≈0, rough≈0) が暗く右上 (NdotV≈1, rough≈0) が明るいグラジエント。NaN/黒パッチなし。
+    </div>
+  </div>
+
+  <div class="insight">
+    <strong>Phase A でやったこと：</strong>
+    <ol style="margin:6px 0 0 18px;padding:0">
+      <li>手続き型天空を純粋関数 <code>EvalSkyRadiance</code> に抽出（ラスタライズ不要）</li>
+      <li>SkyCaptureCS でその関数を cubemap テクセルごとに評価してキャプチャ</li>
+      <li>BRDFLutCS で split-sum BRDF 積分を一度だけ焼き込み</li>
+      <li>6フレーム分散更新でフレームコストを 1/6 に圧縮</li>
+    </ol>
+    <br>
+    <strong>Phase B/C でやること：</strong>
+    この cubemap を <em>畳み込んで</em>拡散・鏡面 IBL テクスチャを生成し、
+    海面・船体 PBR に <code>F0 · scale + bias</code> として足し込む——
+    <strong>データは正しく揃った。次はそれをライティングに使う。</strong>
   </div>
 </section>
 
@@ -567,6 +615,96 @@ function drawS3(){
   requestAnimationFrame(drawS3);
 }
 
+// ─── S5: cubemap unfolded-cross debug view ──────────────────────────────────
+const c5 = document.getElementById('c5');
+let ctx5, s5 = { sunY: 0.50 };
+
+// FACE_GRID from section 2 (horizontal cross layout: col, row)
+const FACE_GRID5 = { 0:[2,1], 1:[0,1], 2:[1,0], 3:[1,2], 4:[1,1], 5:[3,1] };
+const FACE_NAMES5 = ['+X','-X','+Y\n(天頂)','  -Y\n(天底)','+Z','-Z'];
+const FACE_LABELS5 = ['+X : side','-X : side','+Y : sky/stars','-Y : nadir','+Z : forward','-Z : behind'];
+
+function skyColorForDir5(dy, sunY){
+  const dayT    = Math.max(0, Math.min(1, (sunY+0.15)/0.35));
+  const dayTs   = dayT*dayT*(3-2*dayT);
+  const sunsetT = Math.pow(Math.max(0, 1-Math.abs(sunY)/0.22), 2);
+
+  function lerp3(a,b,t){ return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+  const topN=[0.01,0.01,0.06],midN=[0.02,0.02,0.09],botN=[0.03,0.03,0.12];
+  const topS=[0.10,0.16,0.48],midS=[0.95,0.40,0.08],botS=[1.60,0.72,0.12];
+  const topD=[0.08,0.25,0.72],midD=[0.38,0.62,1.05],botD=[0.62,0.80,1.05];
+  let top=lerp3(lerp3(topN,topD,dayTs),topS,sunsetT*0.65);
+  let mid=lerp3(lerp3(midN,midD,dayTs),midS,sunsetT);
+  let bot=lerp3(lerp3(botN,botD,dayTs),botS,sunsetT);
+  let col = dy>0 ? lerp3(mid,top,Math.min(dy/1,1)) : lerp3(bot,mid,Math.min((dy+1),1));
+  return [Math.min(col[0],1)*255, Math.min(col[1],1)*255, Math.min(col[2],1)*255];
+}
+
+function drawFace5(ctx, fx, fy, cellW, cellH, face, sunY){
+  const RES=12;
+  for(let ty=0;ty<RES;ty++){
+    for(let tx=0;tx<RES;tx++){
+      const u = (tx+0.5)/RES*2-1, v = (ty+0.5)/RES*2-1;
+      let dir;
+      switch(face){
+        case 0: dir=[1,-v,-u]; break;
+        case 1: dir=[-1,-v,u]; break;
+        case 2: dir=[u,1,v]; break;
+        case 3: dir=[u,-1,-v]; break;
+        case 4: dir=[u,-v,1]; break;
+        default:dir=[-u,-v,-1];
+      }
+      const len=Math.sqrt(dir[0]*dir[0]+dir[1]*dir[1]+dir[2]*dir[2]);
+      const dy=dir[1]/len;
+      const dx=dir[0]/len, dz=dir[2]/len;
+      let [r,g,b]=skyColorForDir5(dy,sunY);
+      // Sun disc approximation
+      const sunDot=dz*Math.sqrt(1-sunY*sunY)+dy*sunY;
+      if(sunDot>0.995 && sunY>0.05){ r=Math.min(255,r+220); g=Math.min(255,g+220); b=Math.min(200,b+140); }
+      ctx.fillStyle=`rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+      ctx.fillRect(fx+tx*(cellW/RES), fy+ty*(cellH/RES), Math.ceil(cellW/RES)+1, Math.ceil(cellH/RES)+1);
+    }
+  }
+  // Label
+  ctx.font='bold 10px monospace'; ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.textAlign='center';
+  ctx.fillText(FACE_NAMES5[face].split('\n')[0], fx+cellW/2, fy+cellH/2-2);
+  const sub=FACE_NAMES5[face].split('\n')[1];
+  if(sub){ ctx.font='9px sans-serif'; ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.fillText(sub.trim(), fx+cellW/2, fy+cellH/2+10); }
+}
+
+function drawS5(){
+  if(!ctx5) return;
+  const cw=W(c5), ch=H(c5);
+  ctx5.clearRect(0,0,cw,ch);
+
+  const COLS=4, ROWS=3;
+  const cellW=Math.floor((cw-16)/COLS)-4;
+  const cellH=Math.floor((ch-20)/ROWS)-4;
+  const offX=(cw-COLS*(cellW+4))/2;
+  const offY=10;
+
+  // Draw empty cells as dark placeholders
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const x=offX+c*(cellW+4), y=offY+r*(cellH+4);
+      ctx5.fillStyle='#0d1117'; ctx5.fillRect(x,y,cellW,cellH);
+    }
+  }
+
+  // Draw 6 faces
+  for(let face=0;face<6;face++){
+    const [gc,gr]=FACE_GRID5[face];
+    const fx=offX+gc*(cellW+4), fy=offY+gr*(cellH+4);
+    drawFace5(ctx5, fx, fy, cellW, cellH, face, s5.sunY);
+    ctx5.strokeStyle=COL_ACCENT; ctx5.lineWidth=1.5;
+    ctx5.strokeRect(fx,fy,cellW,cellH);
+  }
+
+  // Legend
+  ctx5.font='10px sans-serif'; ctx5.fillStyle=COL_TEXT2; ctx5.textAlign='left';
+  ctx5.fillText('↑ 太陽高度: '+s5.sunY.toFixed(2)+'  (スライダーで変更)', offX, ch-4);
+}
+
 // ─── S4: rolling capture timeline ───────────────────────────────────────────
 const FACE_COLORS = ['#e05252','#52a0e0','#52c473','#c4a952','#9b52c4','#c47d52'];
 const FACE_LABELS = ['+X','-X','+Y','-Y','+Z','-Z'];
@@ -678,6 +816,7 @@ window.addEventListener('load', () => {
   ctx2 = initCanvas(c2);
   ctx3 = initCanvas(c3);
   ctx4 = initCanvas(c4);
+  ctx5 = initCanvas(c5);
 
   bind('r1t', 'v1t', v => fmtClock(+v), v => { s1.t = v; });
   const r1t = document.getElementById('r1t');
@@ -692,12 +831,15 @@ window.addEventListener('load', () => {
   bind('r3ndv',   'v3ndv',   v => (+v).toFixed(2), v => { s3.ndotv = +v; });
   bind('r3rough', 'v3rough', v => (+v).toFixed(2), v => { s3.rough  = +v; });
 
+  bind('r5sun', 'v5sun', v => (+v).toFixed(2), v => { s5.sunY = +v; drawS5(); });
+
   drawS1();
   drawS2();
   drawS3();
   setS4Mode('rolling');
   drawS4();
   s4AnimTimer = setInterval(tickS4, 400);
+  drawS5();
 });
 
 window.addEventListener('resize', () => {
@@ -705,7 +847,9 @@ window.addEventListener('resize', () => {
   ctx2 = initCanvas(c2);
   ctx3 = initCanvas(c3);
   ctx4 = initCanvas(c4);
+  ctx5 = initCanvas(c5);
   drawS4();
+  drawS5();
 });
 </script>
 </body>

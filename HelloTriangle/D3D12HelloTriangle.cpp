@@ -27,7 +27,7 @@ void D3D12HelloTriangle::OnInit()
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
         heapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        heapDesc.NumDescriptors = 1;
+        heapDesc.NumDescriptors = 8;   // slot0=font, slots1-6=cubemap faces, slot7=BRDF LUT
         heapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(m_device->CreateDescriptorHeap(&heapDesc, IID_PPV_ARGS(&m_imguiSrvHeap)));
     }
@@ -171,6 +171,36 @@ void D3D12HelloTriangle::LoadAssets()
     m_iblSystem = std::make_unique<IBLSystem>();
     m_iblSystem->Init(m_device, m_commandQueue, 64, 128,
         pSkyCaptureCS, skyCaptureLen, pBRDFLutCS, brdfLutLen);
+
+    // Create per-face SRVs (slots 1-6) and LUT SRV (slot 7) in the ImGui heap
+    // so ImGui::Image() can display them in the debug preview window.
+    {
+        UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        auto cpuBase = m_imguiSrvHeap->GetCPUDescriptorHandleForHeapStart();
+
+        for (UINT face = 0; face < 6; ++face)
+        {
+            D3D12_CPU_DESCRIPTOR_HANDLE cpu = { cpuBase.ptr + (face + 1) * descSize };
+            D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+            srvDesc.Format                         = DXGI_FORMAT_R16G16B16A16_FLOAT;
+            srvDesc.ViewDimension                  = D3D12_SRV_DIMENSION_TEXTURE2DARRAY;
+            srvDesc.Shader4ComponentMapping        = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            srvDesc.Texture2DArray.MipLevels       = 1;
+            srvDesc.Texture2DArray.FirstArraySlice = face;
+            srvDesc.Texture2DArray.ArraySize       = 1;
+            m_device->CreateShaderResourceView(
+                m_iblSystem->GetCaptureCubemap(), &srvDesc, cpu);
+        }
+
+        D3D12_CPU_DESCRIPTOR_HANDLE cpuLut = { cpuBase.ptr + 7 * descSize };
+        D3D12_SHADER_RESOURCE_VIEW_DESC lutSrv = {};
+        lutSrv.Format                    = DXGI_FORMAT_R16G16_FLOAT;
+        lutSrv.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURE2D;
+        lutSrv.Shader4ComponentMapping   = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        lutSrv.Texture2D.MipLevels       = 1;
+        m_device->CreateShaderResourceView(m_iblSystem->GetBRDFLut(), &lutSrv, cpuLut);
+    }
 
 
     UINT8 *pVS = nullptr, *pPS = nullptr, *pBoxVS = nullptr, *pBoxPS = nullptr;
@@ -696,6 +726,37 @@ void D3D12HelloTriangle::BuildImGuiUI()
     }
 
     ImGui::End();
+
+    // ---- IBL Debug Preview ----
+    ImGui::SetNextWindowSize(ImVec2(340, 310), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(10, 280), ImGuiCond_FirstUseEver);
+    if (ImGui::Begin("IBL Debug", nullptr))
+    {
+        UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        auto gpuBase = m_imguiSrvHeap->GetGPUDescriptorHandleForHeapStart();
+
+        // 6 cubemap faces in a 2×3 grid
+        const float sz = 90.0f;
+        const char* faceNames[6] = { "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
+        for (int face = 0; face < 6; ++face)
+        {
+            D3D12_GPU_DESCRIPTOR_HANDLE h = { gpuBase.ptr + (UINT64)(face + 1) * descSize };
+            ImTextureID texID = (ImTextureID)(void*)h.ptr;
+            if (face % 2 != 0) ImGui::SameLine();
+            ImGui::BeginGroup();
+            ImGui::Text("%s", faceNames[face]);
+            ImGui::Image(texID, ImVec2(sz, sz));
+            ImGui::EndGroup();
+            if (face % 2 == 0) ImGui::SameLine(sz + 16.0f);
+        }
+
+        ImGui::Separator();
+        ImGui::Text("BRDF LUT (R=scale, G=bias)");
+        D3D12_GPU_DESCRIPTOR_HANDLE lutH = { gpuBase.ptr + 7ull * descSize };
+        ImGui::Image((ImTextureID)(void*)lutH.ptr, ImVec2(128, 128));
+    }
+    ImGui::End();
 }
 
 // ============================================================
@@ -907,9 +968,35 @@ void D3D12HelloTriangle::OnRender()
     // ---- ImGui ----
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(180, 180, 180), L"ImGui");
     {
+        // Transition IBL resources to PIXEL_SHADER_RESOURCE so ImGui::Image() can sample them.
+        D3D12_RESOURCE_BARRIER iblIn[2] = {
+            CD3DX12_RESOURCE_BARRIER::Transition(
+                m_iblSystem->GetCaptureCubemap(),
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+            CD3DX12_RESOURCE_BARRIER::Transition(
+                m_iblSystem->GetBRDFLut(),
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
+        };
+        m_commandList->ResourceBarrier(2, iblIn);
+
         ID3D12DescriptorHeap* imguiHeaps[] = { m_imguiSrvHeap.Get() };
         m_commandList->SetDescriptorHeaps(1, imguiHeaps);
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), m_commandList.Get());
+
+        // Restore IBL resources to their normal inter-frame states.
+        D3D12_RESOURCE_BARRIER iblOut[2] = {
+            CD3DX12_RESOURCE_BARRIER::Transition(
+                m_iblSystem->GetCaptureCubemap(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
+            CD3DX12_RESOURCE_BARRIER::Transition(
+                m_iblSystem->GetBRDFLut(),
+                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
+        };
+        m_commandList->ResourceBarrier(2, iblOut);
     }
     PIXEndEvent(m_commandList.Get());
 
