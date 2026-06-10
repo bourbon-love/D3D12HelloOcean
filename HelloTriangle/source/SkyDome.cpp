@@ -405,7 +405,10 @@ float SkyDome::ComputeDayBlend() const
     return t * t * (3.0f - 2.0f * t); // smoothstep
 }
 
-XMFLOAT3 SkyDome::GetActiveLightDirection() const
+// ---- Raw (instant) light helpers ----
+// Used by SmoothLighting() to compute targets; call GetActiveLight*() for smoothed values.
+
+XMFLOAT3 SkyDome::RawActiveLightDirection() const
 {
     float t = ComputeDayBlend();
     return XMFLOAT3(
@@ -414,7 +417,7 @@ XMFLOAT3 SkyDome::GetActiveLightDirection() const
         std::lerp(m_moonDir.z, m_sunDir.z, t));
 }
 
-XMFLOAT3 SkyDome::GetActiveLightColor() const
+XMFLOAT3 SkyDome::RawActiveLightColor() const
 {
     float t = ComputeDayBlend();
     XMFLOAT3 sunCol  = GetSunColor();
@@ -425,9 +428,60 @@ XMFLOAT3 SkyDome::GetActiveLightColor() const
         std::lerp(moonCol.z, sunCol.z, t));
 }
 
-float SkyDome::GetActiveLightIntensity() const
+float SkyDome::RawActiveLightIntensity() const
 {
     return std::lerp(GetMoonIntensity(), GetSunIntensity(), ComputeDayBlend());
+}
+
+// ---- Public getters — return smoothed cached values ----
+
+XMFLOAT3 SkyDome::GetActiveLightDirection() const { return m_smoothLightDir; }
+XMFLOAT3 SkyDome::GetActiveLightColor()     const { return m_smoothLightColor; }
+float    SkyDome::GetActiveLightIntensity() const { return m_smoothLightIntensity; }
+
+// ---- SmoothLighting ----
+// Call once per frame with REAL (unscaled) delta time.
+// Applies a 0.50 s exponential filter so the active light outputs trail the
+// raw mathematical value — fast simulation speeds no longer snap the sunset
+// colour to moonlight blue within a single frame.
+
+void SkyDome::SmoothLighting(float realDt)
+{
+    XMFLOAT3 tColor = RawActiveLightColor();
+    XMFLOAT3 tDir   = RawActiveLightDirection();
+    float    tInt   = RawActiveLightIntensity();
+
+    if (!m_smoothInitialized)
+    {
+        m_smoothLightColor     = tColor;
+        m_smoothLightDir       = tDir;
+        m_smoothLightIntensity = tInt;
+        m_smoothInitialized    = true;
+        return;
+    }
+
+    float alpha = 1.0f - std::exp(-realDt / 0.50f);
+
+    m_smoothLightColor.x += alpha * (tColor.x - m_smoothLightColor.x);
+    m_smoothLightColor.y += alpha * (tColor.y - m_smoothLightColor.y);
+    m_smoothLightColor.z += alpha * (tColor.z - m_smoothLightColor.z);
+
+    m_smoothLightDir.x += alpha * (tDir.x - m_smoothLightDir.x);
+    m_smoothLightDir.y += alpha * (tDir.y - m_smoothLightDir.y);
+    m_smoothLightDir.z += alpha * (tDir.z - m_smoothLightDir.z);
+
+    // Re-normalise after lerp (lerp of unit vectors is not unit-length)
+    float len = std::sqrt(m_smoothLightDir.x * m_smoothLightDir.x
+                        + m_smoothLightDir.y * m_smoothLightDir.y
+                        + m_smoothLightDir.z * m_smoothLightDir.z);
+    if (len > 0.0001f)
+    {
+        m_smoothLightDir.x /= len;
+        m_smoothLightDir.y /= len;
+        m_smoothLightDir.z /= len;
+    }
+
+    m_smoothLightIntensity += alpha * (tInt - m_smoothLightIntensity);
 }
 
 // Primary sky color: transitions from night blue to daytime blue based on sun elevation.

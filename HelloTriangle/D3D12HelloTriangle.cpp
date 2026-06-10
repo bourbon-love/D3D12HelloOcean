@@ -350,23 +350,38 @@ void D3D12HelloTriangle::OnUpdate()
     float weatherIntensity = m_weatherSystem->GetWeatherIntensity();
 
     m_skyDome->Update(scaledDt);
+    m_skyDome->SmoothLighting(deltaTime); // real-time filter: prevents abrupt sunset snapping
     m_skyDome->SetCameraY(m_renderer->GetCameraPos().y);
 
 
     if (m_autoExposure)
     {
-        float sunH    = m_skyDome->GetSunDirection().y;
+        float sunH     = m_skyDome->GetSunDirection().y;
         float weatherI = m_weatherSystem->GetWeatherIntensity();
         float target;
+        // Single continuous ramp: 1.0 at noon, 2.5 at deep night — no formula jump.
+        // Old code had a discontinuous slope change at h=-0.15 (jump from 2.2 to 2.5)
+        // that caused a visible brightness snap during twilight.
         if      (sunH > 0.25f)  target = 1.0f;
-        else if (sunH > 0.0f)   target = 1.0f + (1.6f - 1.0f) * (1.0f - sunH / 0.25f);
-        else if (sunH > -0.15f) target = 1.6f + (2.2f - 1.6f) * (-sunH / 0.15f);
+        else if (sunH > 0.0f)   target = 1.0f + 0.6f * (1.0f - sunH / 0.25f);
+        else if (sunH > -0.30f) target = 1.6f + 0.9f * (-sunH / 0.30f);
         else                    target = 2.5f;
         target += weatherI * 0.4f;
         target = target < 0.3f ? 0.3f : (target > 5.0f ? 5.0f : target);
-        float speed = (target < m_pp->exposure) ? 1.0f : 0.35f;
-        float dt_clamped = speed * deltaTime < 1.0f ? speed * deltaTime : 1.0f;
-        m_pp->exposure += (target - m_pp->exposure) * dt_clamped;
+        if (!m_autoExposureInitialized)
+        {
+            // Snap to target on the first frame so the startup exposure is
+            // already correct.  Without this, exposure starts at 1.0 and
+            // rises toward 1.6 over ~1.5s before falling back to 1.0 as the
+            // sun rises past 0.25 — the whole screen flashes briefly.
+            m_pp->exposure = target;
+            m_autoExposureInitialized = true;
+        }
+        else
+        {
+            float dt_clamped = deltaTime < 1.0f ? deltaTime : 1.0f;
+            m_pp->exposure += (target - m_pp->exposure) * dt_clamped;
+        }
     }
 
     m_renderer->Update(scaledDt);
@@ -989,35 +1004,24 @@ void D3D12HelloTriangle::OnRender()
     // ---- ImGui ----
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(180, 180, 180), L"ImGui");
     {
-        // Transition IBL resources to PIXEL_SHADER_RESOURCE so ImGui::Image() can sample them.
-        D3D12_RESOURCE_BARRIER iblIn[2] = {
-            CD3DX12_RESOURCE_BARRIER::Transition(
-                m_iblSystem->GetCaptureCubemap(),
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-            CD3DX12_RESOURCE_BARRIER::Transition(
-                m_iblSystem->GetBRDFLut(),
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE),
-        };
-        m_commandList->ResourceBarrier(2, iblIn);
+        // Capture cubemap lives in UAV between frames; transition to PSR so ImGui::Image() works.
+        // BRDF LUT is permanently in PSR|NPSR (set by RunBRDFLutOnce) — no transition needed.
+        auto iblIn = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_iblSystem->GetCaptureCubemap(),
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        m_commandList->ResourceBarrier(1, &iblIn);
 
         ID3D12DescriptorHeap* imguiHeaps[] = { m_imguiSrvHeap.Get() };
         m_commandList->SetDescriptorHeaps(1, imguiHeaps);
         ImGui_ImplDX12_RenderDrawData(ImGui::GetDrawData(), m_commandList.Get());
 
-        // Restore IBL resources to their normal inter-frame states.
-        D3D12_RESOURCE_BARRIER iblOut[2] = {
-            CD3DX12_RESOURCE_BARRIER::Transition(
-                m_iblSystem->GetCaptureCubemap(),
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_UNORDERED_ACCESS),
-            CD3DX12_RESOURCE_BARRIER::Transition(
-                m_iblSystem->GetBRDFLut(),
-                D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE),
-        };
-        m_commandList->ResourceBarrier(2, iblOut);
+        // Restore capture cubemap to UAV for next frame's sky capture.
+        auto iblOut = CD3DX12_RESOURCE_BARRIER::Transition(
+            m_iblSystem->GetCaptureCubemap(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        m_commandList->ResourceBarrier(1, &iblOut);
     }
     PIXEndEvent(m_commandList.Get());
 

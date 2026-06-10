@@ -194,31 +194,16 @@ void Renderer::Update(float deltaTime)
     // Read data from the sky system
     if (m_skyDome)
     {
-        cb.sunDir = m_skyDome->GetSunDirection();
-        cb.sunColor = m_skyDome->GetSunColor();
         cb.padSun = 0.0f;
         cb.skyColor = m_skyDome->GetSkyColor();
         cb.padSky = 0.0f;
 
-        // Smoothly interpolate between sunlight and moonlight based on sun elevation. Transition band: sunY in [-0.1, 0.1]
-        float sunY = m_skyDome->GetSunDirection().y;
-        float dayBlend = std::clamp((sunY + 0.1f) / 0.2f, 0.0f, 1.0f);
-
-        XMFLOAT3 sunDir  = m_skyDome->GetSunDirection();
-        XMFLOAT3 moonDir = m_skyDome->GetMoonDirection();
-        cb.sunDir = XMFLOAT3(
-            std::lerp(moonDir.x, sunDir.x, dayBlend),
-            std::lerp(moonDir.y, sunDir.y, dayBlend),
-            std::lerp(moonDir.z, sunDir.z, dayBlend));
-
-        cb.sunIntensity = std::lerp(m_skyDome->GetMoonIntensity(), m_skyDome->GetSunIntensity(), dayBlend);
-
-        XMFLOAT3 sunCol  = m_skyDome->GetSunColor();
-        XMFLOAT3 moonCol = m_skyDome->GetMoonColor();
-        cb.sunColor = XMFLOAT3(
-            std::lerp(moonCol.x, sunCol.x, dayBlend),
-            std::lerp(moonCol.y, sunCol.y, dayBlend),
-            std::lerp(moonCol.z, sunCol.z, dayBlend));
+        // Single light source, smoothly blended between sun and moon by SkyDome
+        // (see SkyDome::GetActiveLight* — keeps the ocean's lighting in sync with
+        // every other directly-lit surface, e.g. the ship).
+        cb.sunDir       = m_skyDome->GetActiveLightDirection();
+        cb.sunIntensity = m_skyDome->GetActiveLightIntensity();
+        cb.sunColor     = m_skyDome->GetActiveLightColor();
 
 
         // Fog

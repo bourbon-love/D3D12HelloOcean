@@ -145,9 +145,7 @@ void RainSystem::Update(float deltaTime, float intensity, float windDirX, float 
     // Target raindrop count varies with intensity
     UINT targetDrops = static_cast<UINT>(intensity * MAX_RAINDROPS);
 
-    // Update existing raindrop positions
-    UINT activeCount = 0;
-    // Spawn ripples when raindrops hit the surface
+    // Update existing raindrop positions and spawn ripples on surface contact
     for (auto& drop : m_drops)
     {
         // Update position
