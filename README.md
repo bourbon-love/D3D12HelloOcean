@@ -193,6 +193,10 @@ shaders/
 
 | Date | Feature |
 |---|---|
+| 2026-06-10 | **Lighting smoothing & startup fix** — SkyDome::SmoothLighting() applies a 0.5 s real-time exponential filter to the active sun/moon direction, color and intensity; sky `m_time` initial value moved below the day/night blend band, fixing a moving specular highlight that swept toward the sun during the first seconds after launch |
+| 2026-06-10 | **Rainbow effect** — additive post-process pass (primary + secondary bow) driven by rain moisture accumulation and sun elevation |
+| 2026-06-10 | Ship-orbit camera mode; continuous AutoExposure ramp with first-frame snap (no startup brightness flash); shadow map sun-direction fix and ship depth pass |
+| 2026-06-09 | **IBL (Image-Based Lighting)** — split-sum approximation: cubemap sky capture, SH9 diffuse irradiance, GGX prefiltered specular + BRDF LUT, applied across ocean / ship / floating objects / fish school; warm-start captures all 6 cubemap faces on the first frame to avoid a dark-IBL startup flicker |
 | 2026-05-27 | **Ship tilt physics** — CPU spring-damper (5 s natural period, ζ = 0.18) driven by GPU FFT height readback (CopyTextureRegion, 1-frame latency); soft angle limit with progressive restoring force |
 | 2026-05-27 | **Weather transitions** — log-space interpolation for phillipsA / windSpeed; 10 s ramp for Calm/Windy/Storm, 20 s for Tsunami; 2-row weather button layout |
 | 2026-05-26 | **Ship PBR** — Cook-Torrance GGX BRDF with normal map and ARM (AO/Roughness/Metallic) texture support |
