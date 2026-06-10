@@ -54,6 +54,8 @@ public:
 	Camera& GetCamera() { return m_camera; }
     void ToggleShowcase() { m_showcaseMode = !m_showcaseMode; }
     bool IsShowcaseMode() const { return m_showcaseMode; }
+    void ToggleShipOrbit() { m_shipOrbitMode = !m_shipOrbitMode; }
+    bool IsShipOrbitMode() const { return m_shipOrbitMode; }
 	// For SkyDome to read sun and sky parameters
     void SetSkyDome(SkyDome* skyDome) { m_skyDome = skyDome; }
     void SetWeatherSystem(WeatherSystem* ws) { m_weatherSystem = ws; }
@@ -71,6 +73,14 @@ public:
         m_cloudEnabled     = enabled;
     }
     void SetJitter(float x, float y) { m_camera.m_jitter = { x, y }; }
+    float GetCloudCoverage()    const { return m_cloudCoverage; }
+    float GetCloudScale()       const { return m_cloudScale; }
+    float GetCloudBase()        const { return m_cloudBase; }
+    float GetCloudTop()         const { return m_cloudTop; }
+    float GetCloudWindX()       const { return m_cloudWindX; }
+    float GetCloudWindZ()       const { return m_cloudWindZ; }
+    float GetCloudDensityMult() const { return m_cloudDensityMult; }
+    float GetCloudEnabled()     const { return m_cloudEnabled; }
     XMMATRIX GetViewMatrix() const
     {
         return m_camera.GetViewMatrix();
@@ -145,6 +155,7 @@ private:
     UINT8* m_pCbvDataBegin;
     bool  m_wireframe = false;
     bool  m_showcaseMode = false;
+    bool  m_shipOrbitMode = false;
     float m_ssrMix = 1.0f;
     float m_time   = 0.0f;
     float m_cloudCoverage    = 0.45f;

@@ -309,8 +309,10 @@ void IBLSystem::CreateConstantBuffers()
 {
     auto heapProp = CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD);
     CD3DX12_RANGE readRange(0, 0);
-    // Single 256-byte slot; CaptureCB is updated via memcpy each Dispatch call.
-    auto bufDesc = CD3DX12_RESOURCE_DESC::Buffer(256);
+    // 6 × 256-byte slots: one per cubemap face.  Normal operation writes one slot per
+    // frame (GPU executes before the slot is reused), and the warm-start path writes
+    // all 6 slots in a single command-list recording without aliasing.
+    auto bufDesc = CD3DX12_RESOURCE_DESC::Buffer(6 * 256);
     ThrowIfFailed(m_device->CreateCommittedResource(
         &heapProp, D3D12_HEAP_FLAG_NONE, &bufDesc,
         D3D12_RESOURCE_STATE_GENERIC_READ, nullptr,
@@ -341,12 +343,12 @@ void IBLSystem::RunBRDFLutOnce(ComPtr<ID3D12CommandQueue> cmdQueue)
 
     cmd->Dispatch(m_lutSize / 8, m_lutSize / 8, 1);
 
-    // Transition LUT from UAV to NON_PIXEL_SHADER_RESOURCE so the future
-    // Phase B/C samplers (running in VS/CS) can read it without a per-frame barrier.
+    // Transition LUT from UAV to PSR|NPSR so both pixel shaders (ocean/ship surface) and
+    // compute/vertex shaders can sample it without per-frame barriers.
     auto barrier = CD3DX12_RESOURCE_BARRIER::Transition(
         m_brdfLut.Get(),
         D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
-        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     cmd->ResourceBarrier(1, &barrier);
 
     ThrowIfFailed(cmd->Close());
@@ -369,12 +371,13 @@ void IBLSystem::RunBRDFLutOnce(ComPtr<ID3D12CommandQueue> cmdQueue)
 }
 
 // -----------------------------------------------
-void IBLSystem::Dispatch(
+// Captures one cubemap face using m_currentFace as both the face index and the CB slot.
+// Each face maps to its own 256-byte region in the 6-slot m_captureCB, so multiple
+// faces can be recorded into a single command list without CB aliasing.
+void IBLSystem::CaptureSingleFace(
     ComPtr<ID3D12GraphicsCommandList> cmdList,
-    SkyDome* skyDome,
-    float /*time*/)
+    SkyDome* skyDome)
 {
-    // Fill CaptureCB from SkyDome's current live state (gradient + celestial params).
     SkyDome::CaptureState cs = skyDome->GetCaptureState();
 
     CaptureCB cb = {};
@@ -393,9 +396,12 @@ void IBLSystem::Dispatch(
     cb.crescentOffsetAmt = cs.crescentOffsetAmt;
     cb.faceIndex         = m_currentFace;
     cb.faceSize          = static_cast<int>(m_faceSize);
-    memcpy(m_captureCBMapped, &cb, sizeof(cb));
 
-    // Dispatch SkyCaptureCS for the current face.
+    // Write into the per-face CB slot so multiple faces recorded in the same
+    // command list each have a distinct VA — avoids last-write-wins aliasing.
+    UINT64 slotOffset = static_cast<UINT64>(m_currentFace) * sizeof(CaptureCB);
+    memcpy(m_captureCBMapped + slotOffset, &cb, sizeof(cb));
+
     UINT descSize = m_device->GetDescriptorHandleIncrementSize(
         D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
@@ -406,7 +412,7 @@ void IBLSystem::Dispatch(
     cmdList->SetDescriptorHeaps(1, heaps);
 
     cmdList->SetComputeRootConstantBufferView(
-        0, m_captureCB->GetGPUVirtualAddress());
+        0, m_captureCB->GetGPUVirtualAddress() + slotOffset);
 
     D3D12_GPU_DESCRIPTOR_HANDLE faceHandle =
         m_captureUAVHeap->GetGPUDescriptorHandleForHeapStart();
@@ -415,11 +421,38 @@ void IBLSystem::Dispatch(
 
     cmdList->Dispatch(m_faceSize / 8, m_faceSize / 8, 1);
 
-    // UAV barrier: ensure the write to this face is visible before any later reader.
-    // Nothing reads the cubemap in Phase A, but correct barrier discipline now
-    // means Phase B doesn't have to retrofit it.
     auto uavBarrier = CD3DX12_RESOURCE_BARRIER::UAV(m_captureCubemap.Get());
     cmdList->ResourceBarrier(1, &uavBarrier);
+}
+
+// -----------------------------------------------
+void IBLSystem::Dispatch(
+    ComPtr<ID3D12GraphicsCommandList> cmdList,
+    SkyDome* skyDome,
+    float /*time*/)
+{
+    if (!m_warmStarted)
+    {
+        // Warm-start: capture all 6 faces in one frame and immediately compute SH +
+        // prefilter so IBL is valid from the very first rendered frame.  Without this,
+        // frames 0-4 have zero ambient/specular IBL; when IBL kicks in on frame 5 the
+        // scene brightens suddenly and TAA history mixes dark and bright frames, causing
+        // visible flickering on the bright wave-specular highlights for several seconds.
+        for (int face = 0; face < 6; face++)
+        {
+            m_currentFace = face;
+            CaptureSingleFace(cmdList, skyDome);
+        }
+        m_currentFace = 0;
+        m_shFrameCount = 6;  // mark as fully initialised so normal checks pass
+        m_warmStarted = true;
+        DispatchIrradiance(cmdList);
+        DispatchPrefilter(cmdList);
+        return;
+    }
+
+    // Normal per-frame update: one face per frame, SH every frame, prefilter every 6 frames.
+    CaptureSingleFace(cmdList, skyDome);
 
     // Advance to the next face (rolling 6-frame cycle).
     m_currentFace = (m_currentFace + 1) % 6;

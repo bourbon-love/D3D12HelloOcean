@@ -68,7 +68,7 @@ void Camera::Move(float forwardDelta, float rightDelta)
 void Camera::UpdateShowcase(float deltaTime)
 {
     if (!m_showcaseMode) return;
-    m_showcaseAngle += deltaTime * 0.3f;
+    m_showcaseAngle += deltaTime * m_showcaseSpeed;
 
     position.x = sinf(m_showcaseAngle) * m_showcaseRadius;
     position.z = cosf(m_showcaseAngle) * m_showcaseRadius;
@@ -85,4 +85,22 @@ void Camera::UpdateShowcase(float deltaTime)
 
     m_yaw   = m_showcaseAngle + XM_PI;
     m_pitch = -atanf(position.y / m_showcaseRadius); // look toward origin
+}
+
+void Camera::UpdateShipOrbit(float deltaTime, const XMFLOAT3& target)
+{
+    if (!m_shipOrbitMode) return;
+    m_shipOrbitAngle += deltaTime * m_showcaseSpeed; // reuse "Orbit Speed" slider
+
+    position.x = target.x + sinf(m_shipOrbitAngle) * m_shipOrbitRadius;
+    position.z = target.z + cosf(m_shipOrbitAngle) * m_shipOrbitRadius;
+    position.y = m_showcaseHeight;                   // reuse "Cam Height" slider
+
+    // Look toward the ship (target), not the world origin
+    float dx    = target.x - position.x;
+    float dy    = target.y - position.y;
+    float dz    = target.z - position.z;
+    float horiz = sqrtf(dx * dx + dz * dz);
+    m_yaw   = atan2f(dx, dz);
+    m_pitch = atan2f(dy, std::max(horiz, 0.001f));
 }

@@ -54,9 +54,17 @@ public:
     // because GetMoonIntensity() never faded with the moon's elevation).
     // Effects that are inherently sun-only (rainbow, lens flare, god rays, weather
     // state) should keep reading GetSunDirection/Intensity/Color directly.
+    //
+    // These return exponentially-smoothed values (0.50s real-time constant).
+    // Call SmoothLighting(realDt) each frame before reading them.
     XMFLOAT3 GetActiveLightDirection() const;
     XMFLOAT3 GetActiveLightColor()     const;
     float    GetActiveLightIntensity() const;
+
+    // Must be called each frame with real (unscaled) delta time, after Update().
+    // Applies an exponential filter so fast simulation time-scales do not cause
+    // the sunset colour to snap abruptly to moonlight within a single frame.
+    void SmoothLighting(float realDt);
     // Setters for weather system
     void SetCloudParams(float density, float scale, float sharpness)
     {
@@ -102,9 +110,13 @@ public:
 
 private:
     // Day/night blend factor: 0 = sun fully below horizon (moon active), 1 = sun fully
-    // risen (sun active); smoothly transitions over sunDir.y in [-0.1, 0.1].
+    // risen (sun active); smoothly transitions over sunDir.y in [-0.25, +0.20].
     // Shared by all three GetActiveLight*() getters so they always agree.
-    float ComputeDayBlend() const;
+    float    ComputeDayBlend()               const;
+    // Raw (instant) active-light values used by SmoothLighting to compute targets.
+    XMFLOAT3 RawActiveLightColor()           const;
+    XMFLOAT3 RawActiveLightDirection()       const;
+    float    RawActiveLightIntensity()       const;
 
     void CreateSphereMesh(ComPtr<ID3D12GraphicsCommandList> cmdList);
     void CreateSkyPSO(const UINT8* vsData, UINT vsSize,
@@ -166,7 +178,11 @@ private:
     UINT8* m_cbMapped = nullptr;
 
     // Sky parameters
-    float     m_time = 0.0f;
+    // Start at sunDir.y ~= -0.43 (below the [-0.25, +0.20] day/night blend band, sun
+    // ascending). ComputeDayBlend() == 0 here, so RawActiveLightDirection() == m_moonDir
+    // exactly on frame 0 -- avoids a mid-blend snap that made SmoothLighting() sweep
+    // the ocean's specular highlight toward the sun during the first few seconds.
+    float     m_time = 17.5f;
     XMFLOAT3  m_sunDir = { 1.0f, 0.0f, 0.0f };
 	XMFLOAT3  m_moonDir = { -1.0f, 0.2f, 0.0f };
     XMFLOAT3  m_crescentDir = { 0.0f, 0.0f, 1.0f }; // Crescent occlusion circle direction, slowly rotates around the moon axis
@@ -186,4 +202,10 @@ private:
     float m_lightningCooldown  = 3.0f; // Wait time before the first trigger
     UINT m_width = 0;
     UINT m_height = 0;
+
+    // Smoothed active-light cache — updated by SmoothLighting(), read by GetActiveLight*().
+    XMFLOAT3 m_smoothLightColor     = { 1.0f, 0.95f, 0.8f };
+    float    m_smoothLightIntensity = 0.8f;
+    XMFLOAT3 m_smoothLightDir       = { 0.5f, 0.8f, 0.3f };
+    bool     m_smoothInitialized    = false;
 };

@@ -60,12 +60,15 @@ private:
     void DispatchIrradiance(ComPtr<ID3D12GraphicsCommandList> cmdList);
     void CreatePrefilterResources(const UINT8* prefilterCSData, UINT prefilterCSSize);  // Phase C
     void DispatchPrefilter(ComPtr<ID3D12GraphicsCommandList> cmdList);                  // Phase C
+    // Captures one cubemap face using m_currentFace as the CB slot index.
+    void CaptureSingleFace(ComPtr<ID3D12GraphicsCommandList> cmdList, SkyDome* skyDome);
 
     ComPtr<ID3D12Device> m_device;
     UINT m_faceSize     = 64;
     UINT m_lutSize      = 128;
     int  m_currentFace  = 0;   // rolling capture index, 0..5
     int  m_shFrameCount = 0;   // total Dispatch calls; drives 30-frame convolve cadence
+    bool m_warmStarted  = false; // true after first-frame full 6-face warm-start
 
     // --- Phase A: sky capture + BRDF LUT ---
     ComPtr<ID3D12Resource>       m_captureCubemap;   // RGBA16F, 6 faces, stays in UAV between frames
