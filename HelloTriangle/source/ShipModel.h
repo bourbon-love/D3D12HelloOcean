@@ -25,8 +25,8 @@ struct ShipCloudParams
 class ShipModel
 {
 public:
-    // gltfDir: absolute path to the folder containing the .gltf file,
-    //          ending with a backslash e.g. "E:\\Assets\\dutch_ship_large_02_1k.gltf\\"
+    // gltfDir: absolute or relative path to the folder containing the .gltf file,
+    //          ending with a backslash e.g. "..\\..\\..\\..\\Assets\\dutch_ship_large_02_1k.gltf\\"
     void Init(
         ComPtr<ID3D12Device>  device,
         IBLSystem*            ibl,           // for CopyDescriptorsSimple into SRV heap slots 4,5

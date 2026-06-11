@@ -277,12 +277,20 @@ void D3D12HelloTriangle::LoadAssets()
         &pShipPS, &shipPsLen));
     ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"ship_ShipShadowVS.cso").c_str(),
         &pShipShadowVS, &shipShadowVsLen));
+    // GetAssetFullPath(L"") is the executable's directory; the GLTF asset lives at
+    // <repo root>\Assets\, four levels up from <repo root>\HelloTriangle\bin\x64\Debug\.
+    std::wstring wAssetsPath = GetAssetFullPath(L"");
+    std::string assetsPathNarrow(wAssetsPath.size(), '\0');
+    for (size_t i = 0; i < wAssetsPath.size(); ++i)
+        assetsPathNarrow[i] = static_cast<char>(wAssetsPath[i]);
+    std::string shipGltfDir = assetsPathNarrow + "..\\..\\..\\..\\Assets\\dutch_ship_large_02_1k.gltf\\";
+
     m_shipModel = std::make_unique<ShipModel>();
     m_shipModel->Init(
         m_device,
         m_iblSystem.get(),
         m_oceanFFT->GetHeightMap(),
-        "E:\\Study\\HelloDX12\\Assets\\dutch_ship_large_02_1k.gltf\\",
+        shipGltfDir,
         pShipVS, shipVsLen,
         pShipPS, shipPsLen,
         pShipShadowVS, shipShadowVsLen);
