@@ -365,3 +365,7 @@ FodyWeavers.xsd
 freelance_and_ue_plan.md
 INTERVIEW_QA.md
 HelloTriangle/imgui.ini
+
+# Local interactive learning tutorials (not for public repo)
+*-tutorial.html
+*-interactive.html
