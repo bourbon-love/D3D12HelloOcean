@@ -361,12 +361,27 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
-.claude/settings.local.json
+.claude/
+.superpowers/
 freelance_and_ue_plan.md
 INTERVIEW_QA.md
 imgui.ini
 HelloTriangle/imgui.ini
+CLAUDE.md
 
 # Local interactive learning tutorials (not for public repo)
 *-tutorial.html
 *-interactive.html
+FFT_OCEAN_V2.html
+pbr-tutorial/
+libs/
+
+# Local planning docs / notes (not for public repo)
+docs/
+TECHNICAL_DOC_*.md
+
+# Portfolio materials (personal use)
+*[Pp]ortfolio*
+
+# Local dev verification screenshots (not for public repo)
+screenshots/*_check*.png
