@@ -193,6 +193,9 @@ shaders/
 
 | Date | Feature |
 |---|---|
+| 2026-06-29 | **Cloud shadow flicker fix** — replaced 6-step FBM ray-march with a single low-frequency (`cs_vnoise`) lookup at the cloud mid-altitude projection point; eliminates the multi-Hz brightness buzz caused by the fast-orbiting sun sweeping sample points across high-frequency noise (applied to both ocean surface and ship hull shaders) |
+| 2026-06-29 | **Ship tilt physics tuning** — sample distance increased from 20 m to 35 m to better represent hull length and average out short-wavelength waves; spring natural period extended from 5 s to 9 s (ζ = 0.28) for a heavier, more inertial feel in calm conditions |
+| 2026-06-29 | **Show Ship toggle** — ImGui checkbox to hide/show the ship model independently of the scene; useful for recording weather-only footage |
 | 2026-06-10 | **Lighting smoothing & startup fix** — SkyDome::SmoothLighting() applies a 0.5 s real-time exponential filter to the active sun/moon direction, color and intensity; sky `m_time` initial value moved below the day/night blend band, fixing a moving specular highlight that swept toward the sun during the first seconds after launch |
 | 2026-06-10 | **Rainbow effect** — additive post-process pass (primary + secondary bow) driven by rain moisture accumulation and sun elevation |
 | 2026-06-10 | Ship-orbit camera mode; continuous AutoExposure ramp with first-frame snap (no startup brightness flash); shadow map sun-direction fix and ship depth pass |
