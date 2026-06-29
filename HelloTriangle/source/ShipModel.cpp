@@ -500,16 +500,20 @@ void ShipModel::InitBuffers(ComPtr<ID3D12GraphicsCommandList> cmdList)
 
 void ShipModel::Update(float dt, float h0, float hBow, float hSide)
 {
-    // Gradient from actual FFT heightmap: same formula as the old GPU version
-    constexpr float STEP = 20.0f;
+    // Gradient from actual FFT heightmap. STEP must match RecordHeightSamples call.
+    // Larger STEP smooths out short wavelength waves (ship hull averages over its length)
+    // and samples closer to the actual bow of a large vessel.
+    constexpr float STEP = 35.0f;
     float targetPitch = -(hBow  - h0) / STEP;
     float targetRoll  =  (hSide - h0) / STEP;
 
-    // Spring-damper: 5-second natural period, damping ratio 0.18 (τ ≈ 4.4 s)
+    // Spring-damper: 9-second natural period, damping ratio 0.28.
+    // Longer period + higher damping gives the ship the inertial feel of a large hull;
+    // the old 5-second spring was too responsive in calm weather.
     constexpr float PI      = 3.14159265f;
-    constexpr float omegaN  = 2.0f * PI / 5.0f;
+    constexpr float omegaN  = 2.0f * PI / 9.0f;
     constexpr float springK = omegaN * omegaN;
-    constexpr float dampC   = 2.0f * 0.18f * omegaN;
+    constexpr float dampC   = 2.0f * 0.28f * omegaN;
 
     m_pitchVel += (targetPitch - m_pitch) * springK * dt - m_pitchVel * dampC * dt;
     m_pitch    += m_pitchVel * dt;

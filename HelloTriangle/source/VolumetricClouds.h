@@ -17,10 +17,10 @@ public:
     // ImGui-editable params
     bool  enabled         = true;
     float cloudCoverage   = 0.45f;  // 0=clear, 1=overcast
-    float densityMult     = 1.0f;
-    float cloudScale      = 1.0f;
-    float cloudBase       = 600.0f; // meters
-    float cloudTop        = 2200.0f;
+    float densityMult     = 0.61f;
+    float cloudScale      = 1.09f;
+    float cloudBase       = 2000.0f; // meters
+    float cloudTop        = 5000.0f;
 
     void Init(
         ComPtr<ID3D12Device> device,

@@ -78,30 +78,28 @@ float cs_fbm3(float3 p)
 }
 float CloudShadow(float3 worldPos)
 {
-    if (cloudEnabled < 0.5 || sunDir.y <= 0.02) return 1.0;
-    float3 sd     = normalize(sunDir);
-    float  tStart = (cloudBase - worldPos.y) / max(sd.y, 0.02);
-    float  tEnd   = (cloudTop  - worldPos.y) / max(sd.y, 0.02);
-    if (tEnd <= tStart) return 1.0;
-
-    const int STEPS = 6;
-    float stepSize = (tEnd - tStart) / float(STEPS);
-    float sigma    = 0.0;
-    float3 drift   = float3(cloudWindX, 0.0, cloudWindZ) * time * 30.0;
-
-    [unroll]
-    for (int i = 0; i < STEPS; i++)
-    {
-        float  t       = tStart + (i + 0.5) * stepSize;
-        float3 p       = worldPos + sd * t;
-        float3 q       = (p + drift) * cloudScale * 0.00030;
-        float  base    = cs_fbm3(q);
-        float  thresh  = 0.56 - cloudCoverage * 0.44;
-        float  density = smoothstep(0.0, 0.35, base - thresh) * cloudDensityMult;
-        sigma += density * stepSize * 0.052;
-    }
-    // Amplify slightly so thin cloud still casts a perceptible shadow
-    return exp(-sigma * 2.0);
+    if (cloudEnabled < 0.5 || sunDir.y <= 0.0) return 1.0;
+    float3 sd  = normalize(sunDir);
+    // Clamp elevation so the projection distance stays bounded near the horizon.
+    float  sdy = max(sd.y, 0.15);
+    // Project the water point up the sun ray to the cloud layer's mid-altitude.
+    // That single crossing point is where the cloud occludes the sun for this
+    // point; one lookup avoids the jitter of averaging a few sparse ray samples.
+    float  midAlt = (cloudBase + cloudTop) * 0.5;
+    float3 p      = worldPos + sd * ((midAlt - worldPos.y) / sdy);
+    float3 drift  = float3(cloudWindX, 0.0, cloudWindZ) * time * 30.0;
+    // The sun orbits at ~0.3 rad/s, so this crossing point sweeps tens of metres
+    // horizontally every frame. A single low-frequency octave (wavelength ~5 km)
+    // turns that motion into slow, smooth shadow drift; the higher-frequency
+    // octaves used for the visible clouds alias into a multi-Hz brightness buzz
+    // on the water as the sun moves (the flicker this replaces).
+    float3 q      = (p + drift) * cloudScale * 0.0002;
+    float  base   = cs_vnoise(q);
+    float  thresh = 0.56 - cloudCoverage * 0.36;
+    float  density = smoothstep(0.0, 0.6, base - thresh) * cloudDensityMult;
+    float  shadow  = exp(-density * 4.5);
+    // Fade the shadow out smoothly near the horizon instead of a hard cutoff.
+    return lerp(1.0, shadow, smoothstep(0.0, 0.15, sunDir.y));
 }
 
 struct RippleData

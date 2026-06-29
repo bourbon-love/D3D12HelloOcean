@@ -89,11 +89,14 @@ float SampleDensity(float3 pos)
 
     float base = fbm5(q);
 
-    float threshold = 0.56 - cloudCoverage * 0.44;
+    // Coverage->threshold slope kept shallow so high coverage never fully
+    // saturates the noise field, leaving sky gaps even at max coverage.
+    float threshold = 0.56 - cloudCoverage * 0.36;
     float raw = base - threshold;
     // Wide smoothstep gives a gradual density ramp at cloud edges,
-    // preventing hard binary on/off transitions visible as grid pixels at half-resolution
-    float density = smoothstep(0.0, 0.55, raw) * densityMult;
+    // preventing hard binary on/off transitions visible as grid pixels at half-resolution,
+    // and keeps internal texture variation instead of clamping to a flat ceiling at high coverage
+    float density = smoothstep(0.0, 0.75, raw) * densityMult;
 
     // Altitude gradient: wider base fade (0.15 vs 0.10) for softer cloud bottoms
     float h = saturate((pos.y - cloudBase) / (cloudTop - cloudBase));

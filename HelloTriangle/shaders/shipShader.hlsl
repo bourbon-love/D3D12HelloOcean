@@ -122,29 +122,23 @@ float cs_fbm3(float3 p)
          + cs_vnoise(p * 2.031) * 0.250
          + cs_vnoise(p * 4.073) * 0.125;
 }
+// Single-point, low-frequency cloud shadow -- see shaders.hlsl CloudShadow() for
+// the rationale (avoids the multi-Hz flicker the old long-ray + cs_fbm3 version
+// produced as the fast-orbiting sun swept sample points across high-freq noise).
 float CloudShadow(float3 worldPos)
 {
     if (cloudEnabled < 0.5 || lightDir.y <= 0.02) return 1.0;
     float3 sd     = normalize(lightDir);
-    float  tStart = (cloudBase - worldPos.y) / max(sd.y, 0.02);
-    float  tEnd   = (cloudTop  - worldPos.y) / max(sd.y, 0.02);
-    if (tEnd <= tStart) return 1.0;
-    const int STEPS = 6;
-    float stepSize = (tEnd - tStart) / float(STEPS);
-    float sigma    = 0.0;
-    float3 drift   = float3(cloudWindX, 0.0, cloudWindZ) * time * 30.0;
-    [unroll]
-    for (int i = 0; i < STEPS; i++)
-    {
-        float  t       = tStart + (i + 0.5) * stepSize;
-        float3 p       = worldPos + sd * t;
-        float3 q       = (p + drift) * cloudScale * 0.00030;
-        float  base    = cs_fbm3(q);
-        float  thresh  = 0.56 - cloudCoverage * 0.44;
-        float  density = smoothstep(0.0, 0.35, base - thresh) * cloudDensityMult;
-        sigma += density * stepSize * 0.052;
-    }
-    return exp(-sigma * 2.0);
+    float  sdy    = max(sd.y, 0.15);
+    float  midAlt = (cloudBase + cloudTop) * 0.5;
+    float3 p      = worldPos + sd * ((midAlt - worldPos.y) / sdy);
+    float3 drift  = float3(cloudWindX, 0.0, cloudWindZ) * time * 30.0;
+    float3 q      = (p + drift) * cloudScale * 0.0002;
+    float  base   = cs_vnoise(q);
+    float  thresh = 0.56 - cloudCoverage * 0.36;
+    float  density = smoothstep(0.0, 0.6, base - thresh) * cloudDensityMult;
+    float  shadow  = exp(-density * 4.5);
+    return lerp(1.0, shadow, smoothstep(0.0, 0.15, lightDir.y));
 }
 
 // Cotangent-frame TBN (Mikkelsen method — no vertex tangents needed)
