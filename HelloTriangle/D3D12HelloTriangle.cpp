@@ -394,6 +394,7 @@ void D3D12HelloTriangle::OnUpdate()
 
     m_renderer->Update(scaledDt);
     m_weatherSystem->Update(scaledDt);
+    if (m_showShip)
     {
         OceanFFT::HeightSamples hs = m_oceanFFT->HasHeightSamples()
             ? m_oceanFFT->ReadHeightSamples()
@@ -539,8 +540,8 @@ void D3D12HelloTriangle::BuildImGuiUI()
             ImGui::SliderFloat("Coverage", &m_volumetricClouds->cloudCoverage, 0.0f, 1.0f, "%.2f");
         ImGui::SliderFloat("Density",  &m_volumetricClouds->densityMult,   0.1f,    3.0f,    "%.2f");
         ImGui::SliderFloat("Scale",    &m_volumetricClouds->cloudScale,    0.3f,    3.0f,    "%.2f");
-        ImGui::SliderFloat("Base (m)", &m_volumetricClouds->cloudBase,     200.0f,  2000.0f, "%.0f");
-        ImGui::SliderFloat("Top (m)",  &m_volumetricClouds->cloudTop,      500.0f,  5000.0f, "%.0f");
+        ImGui::SliderFloat("Base (m)", &m_volumetricClouds->cloudBase,     200.0f,  3000.0f, "%.0f");
+        ImGui::SliderFloat("Top (m)",  &m_volumetricClouds->cloudTop,      500.0f,  7000.0f, "%.0f");
     }
 
     // --- Water ---
@@ -694,6 +695,8 @@ void D3D12HelloTriangle::BuildImGuiUI()
             m_renderer->ToggleShipOrbit(); m_renderer->GetCamera().EnterShipOrbit();
         }
     }
+    ImGui::SameLine();
+    ImGui::Checkbox("Show Ship", &m_showShip);
 
     // Group 2 — Weather
     NextGroup(2);
@@ -824,7 +827,7 @@ void D3D12HelloTriangle::OnRender()
     // ---- ShadowMap ----
     PIXBeginEvent(m_commandList.Get(), PIX_COLOR(80, 80, 80), L"ShadowMap");
     m_pp->RenderShadowMap(m_commandList.Get(), m_skyDome.get(), m_renderer.get(),
-                          m_floatingObject.get(), m_shipModel.get());
+                          m_floatingObject.get(), m_showShip ? m_shipModel.get() : nullptr);
     PIXEndEvent(m_commandList.Get());
 
     RenderContext ctx;
@@ -942,48 +945,51 @@ void D3D12HelloTriangle::OnRender()
     PIXEndEvent(m_commandList.Get());
 
     // ---- Ship ----
-    PIXBeginEvent(m_commandList.Get(), PIX_COLOR(139, 90, 43), L"Ship");
-    ShipCloudParams shipCloud {
-        m_renderer->GetTime(),
-        m_renderer->GetCloudCoverage(),    m_renderer->GetCloudScale(),
-        m_renderer->GetCloudBase(),        m_renderer->GetCloudTop(),
-        m_renderer->GetCloudWindX(),       m_renderer->GetCloudWindZ(),
-        m_renderer->GetCloudDensityMult(), m_renderer->GetCloudEnabled()
-    };
-    // Single light source, smoothly blended between sun and moon by SkyDome
-    // (see SkyDome::GetActiveLight* — keeps the ship's lighting in sync with the ocean
-    // and prevents two simultaneously-active lights from opposite directions, which used
-    // to leak "moonlight" onto the sunlit side of the hull at full daylight).
-    m_shipModel->Render(ctx,
-        m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
-        m_skyDome->GetActiveLightColor(),     m_renderer->GetCameraPos(),
-        m_skyDome->GetLightningIntensity(),
-        shipCloud,
-        m_iblSystem->GetSHCB());
-    // Restore ocean root signature and SRV heap after ship changes them
-    m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
+    if (m_showShip)
     {
-        auto* shipRestoreHeap = m_pp->GetOceanSRVHeap();
-        ID3D12DescriptorHeap* shipRestoreHeaps[] = { shipRestoreHeap };
-        m_commandList->SetDescriptorHeaps(1, shipRestoreHeaps);
-        m_commandList->SetGraphicsRootDescriptorTable(1, shipRestoreHeap->GetGPUDescriptorHandleForHeapStart());
-        m_commandList->SetGraphicsRootConstantBufferView(2, m_rainSystem->GetRippleCBAddress());
-        m_commandList->SetGraphicsRootConstantBufferView(3, m_pp->GetShadowSceneCBAddr());
-    }
-    PIXEndEvent(m_commandList.Get());
+        PIXBeginEvent(m_commandList.Get(), PIX_COLOR(139, 90, 43), L"Ship");
+        ShipCloudParams shipCloud {
+            m_renderer->GetTime(),
+            m_renderer->GetCloudCoverage(),    m_renderer->GetCloudScale(),
+            m_renderer->GetCloudBase(),        m_renderer->GetCloudTop(),
+            m_renderer->GetCloudWindX(),       m_renderer->GetCloudWindZ(),
+            m_renderer->GetCloudDensityMult(), m_renderer->GetCloudEnabled()
+        };
+        // Single light source, smoothly blended between sun and moon by SkyDome
+        // (see SkyDome::GetActiveLight* — keeps the ship's lighting in sync with the ocean
+        // and prevents two simultaneously-active lights from opposite directions, which used
+        // to leak "moonlight" onto the sunlit side of the hull at full daylight).
+        m_shipModel->Render(ctx,
+            m_skyDome->GetActiveLightDirection(), m_skyDome->GetActiveLightIntensity(),
+            m_skyDome->GetActiveLightColor(),     m_renderer->GetCameraPos(),
+            m_skyDome->GetLightningIntensity(),
+            shipCloud,
+            m_iblSystem->GetSHCB());
+        // Restore ocean root signature and SRV heap after ship changes them
+        m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
+        {
+            auto* shipRestoreHeap = m_pp->GetOceanSRVHeap();
+            ID3D12DescriptorHeap* shipRestoreHeaps[] = { shipRestoreHeap };
+            m_commandList->SetDescriptorHeaps(1, shipRestoreHeaps);
+            m_commandList->SetGraphicsRootDescriptorTable(1, shipRestoreHeap->GetGPUDescriptorHandleForHeapStart());
+            m_commandList->SetGraphicsRootConstantBufferView(2, m_rainSystem->GetRippleCBAddress());
+            m_commandList->SetGraphicsRootConstantBufferView(3, m_pp->GetShadowSceneCBAddr());
+        }
+        PIXEndEvent(m_commandList.Get());
 
-    // ---- Height readback for ship physics (1-frame latency) ----
-    {
-        constexpr float STEP = 20.0f;
-        float sx  = m_shipModel->worldPos.x;
-        float sz  = m_shipModel->worldPos.z;
-        float yaw = m_shipModel->yaw;
-        float bx  = -sinf(yaw), bz = cosf(yaw);   // bow direction
-        float rx  =  cosf(yaw), rz = sinf(yaw);   // starboard direction
-        m_oceanFFT->RecordHeightSamples(m_commandList.Get(),
-            sx,                sz,
-            sx + bx * STEP,    sz + bz * STEP,
-            sx + rx * STEP,    sz + rz * STEP);
+        // ---- Height readback for ship physics (1-frame latency) ----
+        {
+            constexpr float STEP = 35.0f;  // must match ShipModel::Update STEP
+            float sx  = m_shipModel->worldPos.x;
+            float sz  = m_shipModel->worldPos.z;
+            float yaw = m_shipModel->yaw;
+            float bx  = -sinf(yaw), bz = cosf(yaw);   // bow direction
+            float rx  =  cosf(yaw), rz = sinf(yaw);   // starboard direction
+            m_oceanFFT->RecordHeightSamples(m_commandList.Get(),
+                sx,                sz,
+                sx + bx * STEP,    sz + bz * STEP,
+                sx + rx * STEP,    sz + rz * STEP);
+        }
     }
 
     // ---- Rain ----
