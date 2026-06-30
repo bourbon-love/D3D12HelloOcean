@@ -86,7 +86,7 @@ private:
 
     float m_timeScale   = 1.0f;
     bool  m_timePaused  = false;
-    bool  m_showShip    = true;
+    bool  m_showShip    = false;
     bool  m_autoExposure            = true;
     bool  m_autoExposureInitialized = false;
     bool  m_showIBLDebug            = false;  // toggle in "Post Process" panel

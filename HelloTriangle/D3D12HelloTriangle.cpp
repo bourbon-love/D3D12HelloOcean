@@ -547,13 +547,13 @@ void D3D12HelloTriangle::BuildImGuiUI()
     // --- Water ---
     ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "Water");
     ImGui::SliderFloat("Body Str",    &m_pp->waterBodyStr,  0.0f, 3.0f,  "%.2f");
-    ImGui::SliderFloat("Refraction",  &m_pp->waterRefract,  0.0f, 0.08f, "%.3f");
+    ImGui::SliderFloat("Wave Distort",&m_pp->waterRefract,  0.0f, 0.12f, "%.3f");
     ImGui::SliderFloat("Min Transmit",&m_pp->waterMinTrans, 0.0f, 0.6f,  "%.2f");
 
     // --- Camera / Showcase ---
     ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "Camera");
     ImGui::SliderFloat("Vignette",   &m_pp->vignetteStrength, 0.0f, 1.5f,  "%.2f");
-    ImGui::SliderFloat("Film Grain", &m_pp->grainStrength,    0.0f, 0.08f, "%.3f");
+    ImGui::SliderFloat("Film Grain", &m_pp->grainStrength,    0.0f, 0.25f, "%.3f");
     if (m_renderer->IsShowcaseMode() || m_renderer->IsShipOrbitMode())
     {
         // Shared by both orbit modes (Showcase / Ship Orbit are mutually exclusive)
@@ -601,9 +601,9 @@ void D3D12HelloTriangle::BuildImGuiUI()
     ImGui::Checkbox("Enable DOF", &m_pp->dofEnabled);
     if (m_pp->dofEnabled)
     {
-        ImGui::SliderFloat("Focus Depth", &m_pp->dofFocusDepth, 0.5f,  1.0f,   "%.3f");
-        ImGui::SliderFloat("Focus Range", &m_pp->dofFocusRange, 0.02f, 0.5f,   "%.3f");
-        ImGui::SliderFloat("Max Blur",    &m_pp->dofMaxRadius,  0.002f,0.025f, "%.4f");
+        ImGui::SliderFloat("Focus Depth", &m_pp->dofFocusDepth, 0.1f,  1.0f,  "%.3f");
+        ImGui::SliderFloat("Focus Range", &m_pp->dofFocusRange, 0.01f, 0.3f,  "%.3f");
+        ImGui::SliderFloat("Max Blur",    &m_pp->dofMaxRadius,  0.002f,0.05f, "%.4f");
     }
 
     // --- SSAO ---
@@ -639,7 +639,38 @@ void D3D12HelloTriangle::BuildImGuiUI()
 
     // --- IBL ---
     ImGui::Separator(); ImGui::TextColored({0.4f,0.8f,1.0f,1.0f}, "IBL");
-    ImGui::Checkbox("IBL Debug Preview", &m_showIBLDebug);
+    ImGui::Checkbox("IBL Preview", &m_showIBLDebug);
+
+    {
+        UINT descSize = m_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+        auto gpuBase = m_imguiSrvHeap->GetGPUDescriptorHandleForHeapStart();
+        ImVec4 tint = m_showIBLDebug
+            ? ImVec4(1.0f, 1.0f, 1.0f, 1.0f)
+            : ImVec4(0.12f, 0.12f, 0.12f, 1.0f);
+
+        const float sz = 90.0f;
+        const char* faceNames[6] = { "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
+        for (int face = 0; face < 6; ++face)
+        {
+            D3D12_GPU_DESCRIPTOR_HANDLE h = { gpuBase.ptr + (UINT64)(face + 1) * descSize };
+            ImTextureID texID = (ImTextureID)(void*)h.ptr;
+            if (face % 2 != 0) ImGui::SameLine();
+            ImGui::BeginGroup();
+            ImGui::Text("%s", faceNames[face]);
+            ImGui::Image(texID, ImVec2(sz, sz), ImVec2(0,0), ImVec2(1,1), tint);
+            ImGui::EndGroup();
+            if (face % 2 == 0) ImGui::SameLine(sz + 16.0f);
+        }
+
+        ImGui::Separator();
+        ImGui::TextColored(
+            m_showIBLDebug ? ImVec4(1,1,1,1) : ImVec4(0.4f,0.4f,0.4f,1),
+            "BRDF LUT (R=scale, G=bias)");
+        D3D12_GPU_DESCRIPTOR_HANDLE lutH = { gpuBase.ptr + 7ull * descSize };
+        ImGui::Image((ImTextureID)(void*)lutH.ptr, ImVec2(128, 128),
+                     ImVec2(0,0), ImVec2(1,1), tint);
+    }
 
     ImGui::End();
 
@@ -766,37 +797,6 @@ void D3D12HelloTriangle::BuildImGuiUI()
 
     ImGui::End();
 
-    // ---- IBL Debug Preview (gated) ----
-    if (!m_showIBLDebug) return;
-    ImGui::SetNextWindowSize(ImVec2(340, 310), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowPos(ImVec2(10, 280), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("IBL Debug", nullptr))
-    {
-        UINT descSize = m_device->GetDescriptorHandleIncrementSize(
-            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-        auto gpuBase = m_imguiSrvHeap->GetGPUDescriptorHandleForHeapStart();
-
-        // 6 cubemap faces in a 2×3 grid
-        const float sz = 90.0f;
-        const char* faceNames[6] = { "+X", "-X", "+Y", "-Y", "+Z", "-Z" };
-        for (int face = 0; face < 6; ++face)
-        {
-            D3D12_GPU_DESCRIPTOR_HANDLE h = { gpuBase.ptr + (UINT64)(face + 1) * descSize };
-            ImTextureID texID = (ImTextureID)(void*)h.ptr;
-            if (face % 2 != 0) ImGui::SameLine();
-            ImGui::BeginGroup();
-            ImGui::Text("%s", faceNames[face]);
-            ImGui::Image(texID, ImVec2(sz, sz));
-            ImGui::EndGroup();
-            if (face % 2 == 0) ImGui::SameLine(sz + 16.0f);
-        }
-
-        ImGui::Separator();
-        ImGui::Text("BRDF LUT (R=scale, G=bias)");
-        D3D12_GPU_DESCRIPTOR_HANDLE lutH = { gpuBase.ptr + 7ull * descSize };
-        ImGui::Image((ImTextureID)(void*)lutH.ptr, ImVec2(128, 128));
-    }
-    ImGui::End();
 }
 
 // ============================================================

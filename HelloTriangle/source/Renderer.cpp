@@ -270,6 +270,13 @@ void Renderer::Update(float deltaTime)
 
 void Renderer::OnMouseMove(float dx, float dy)
 {
+    if (m_showcaseMode || m_shipOrbitMode)
+    {
+        // In orbit modes only vertical drag adjusts camera height; auto-orbit controls yaw/pitch.
+        m_camera.m_showcaseHeight = std::clamp(
+            m_camera.m_showcaseHeight - dy * 0.3f, -15.0f, 40.0f);
+        return;
+    }
     m_camera.ProcessMouse(dx, dy);
 }
 

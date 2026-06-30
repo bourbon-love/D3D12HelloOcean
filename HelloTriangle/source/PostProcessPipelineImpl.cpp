@@ -1261,8 +1261,10 @@ void PostProcessPipeline::RenderBloom(ID3D12GraphicsCommandList* cmd)
     cmd->ClearRenderTargetView(rtvExtract, kBlack, 0, nullptr);
     cmd->DrawInstanced(3, 1, 0, 0);
 
-    float pBlurH[4] = { 0.f, 0.f, 1.f, 0.f };
-    float pBlurV[4] = { 0.f, 0.f, 0.f, 1.f };
+    // Step multiplier >1 widens each 9-tap Gaussian pass from ±4px to ±10px,
+    // so four passes give an effective bloom radius of ~80px instead of ~16px.
+    float pBlurH[4] = { 0.f, 0.f, 2.5f, 0.f };
+    float pBlurV[4] = { 0.f, 0.f, 0.f, 2.5f };
     for (int iter = 0; iter < 2; ++iter)
     {
         {
