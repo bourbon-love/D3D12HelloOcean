@@ -251,6 +251,6 @@ private:
     void RenderDOF(ID3D12GraphicsCommandList* cmd);
     void RenderTAA(ID3D12GraphicsCommandList* cmd);
 
-    std::wstring AssetPath(const wchar_t* name) const { return m_assetDir + name; }
+    std::wstring AssetPath(const wchar_t* name) const { return m_assetDir + L"shaders\\" + name; }
     D3D12_CPU_DESCRIPTOR_HANDLE RTV(UINT relativeSlot) const;
 };

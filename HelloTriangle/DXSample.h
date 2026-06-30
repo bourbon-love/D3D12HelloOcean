@@ -38,6 +38,7 @@ public:
 
 protected:
     std::wstring GetAssetFullPath(LPCWSTR assetName);
+    std::wstring GetShaderFullPath(LPCWSTR shaderName) { return m_assetsPath + L"shaders\\" + shaderName; }
 
     void GetHardwareAdapter(
         _In_ IDXGIFactory1* pFactory,
