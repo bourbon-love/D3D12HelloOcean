@@ -7,4 +7,4 @@
 imgui.ini
 
 # HLSL source files (compiled .cso files are sufficient at runtime)
-shaders/
+shaders/*.hlsl

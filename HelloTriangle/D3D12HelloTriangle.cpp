@@ -188,19 +188,19 @@ void D3D12HelloTriangle::LoadAssets()
     // OceanFFT
     UINT8 *pPhillips = nullptr, *pTimeEvo = nullptr, *pIFFT = nullptr;
     UINT   phillipsLen = 0, timeEvoLen = 0, ifftLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"PhillipsCS.cso").c_str(),       &pPhillips, &phillipsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"TimeEvolutionCS.cso").c_str(), &pTimeEvo,  &timeEvoLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"IFFTCS.cso").c_str(),          &pIFFT,     &ifftLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"PhillipsCS.cso").c_str(),       &pPhillips, &phillipsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"TimeEvolutionCS.cso").c_str(), &pTimeEvo,  &timeEvoLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"IFFTCS.cso").c_str(),          &pIFFT,     &ifftLen));
     m_oceanFFT = std::make_unique<OceanFFT>();
     m_oceanFFT->Init(m_device, m_commandQueue, 256,
         pPhillips, phillipsLen, pTimeEvo, timeEvoLen, pIFFT, ifftLen);
 
     UINT8 *pSkyCaptureCS = nullptr, *pBRDFLutCS = nullptr, *pIrradCS = nullptr, *pPrefilterCS = nullptr;
     UINT   skyCaptureLen = 0, brdfLutLen = 0, irradLen = 0, prefilterLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"SkyCaptureCS.cso").c_str(),           &pSkyCaptureCS, &skyCaptureLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"BRDFLutCS.cso").c_str(),              &pBRDFLutCS,    &brdfLutLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"IrradianceConvolveCS.cso").c_str(),   &pIrradCS,      &irradLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"PrefilterSpecularCS.cso").c_str(),    &pPrefilterCS,  &prefilterLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"SkyCaptureCS.cso").c_str(),           &pSkyCaptureCS, &skyCaptureLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"BRDFLutCS.cso").c_str(),              &pBRDFLutCS,    &brdfLutLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"IrradianceConvolveCS.cso").c_str(),   &pIrradCS,      &irradLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"PrefilterSpecularCS.cso").c_str(),    &pPrefilterCS,  &prefilterLen));
     m_iblSystem = std::make_unique<IBLSystem>();
     m_iblSystem->Init(m_device, m_commandQueue, 64, 128,
         pSkyCaptureCS, skyCaptureLen, pBRDFLutCS, brdfLutLen,
@@ -208,10 +208,10 @@ void D3D12HelloTriangle::LoadAssets()
 
     UINT8 *pVS = nullptr, *pPS = nullptr, *pBoxVS = nullptr, *pBoxPS = nullptr;
     UINT   vsLen = 0, psLen = 0, boxVsLen = 0, boxPsLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"shaders_VSMain.cso").c_str(),      &pVS,    &vsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"shaders_PSMain.cso").c_str(),      &pPS,    &psLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"waterbody_VSMain.cso").c_str(),    &pBoxVS, &boxVsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"waterbody_PSMain.cso").c_str(),    &pBoxPS, &boxPsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"shaders_VSMain.cso").c_str(),      &pVS,    &vsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"shaders_PSMain.cso").c_str(),      &pPS,    &psLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"waterbody_VSMain.cso").c_str(),    &pBoxVS, &boxVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"waterbody_PSMain.cso").c_str(),    &pBoxPS, &boxPsLen));
     m_renderer = std::make_unique<Renderer>();
     m_renderer->InitPSO(m_device, m_rootSignature, m_width, m_height,
         pVS, vsLen, pPS, psLen, pBoxVS, boxVsLen, pBoxPS, boxPsLen);
@@ -219,8 +219,8 @@ void D3D12HelloTriangle::LoadAssets()
     // SkyDome
     UINT8 *pSkyVS = nullptr, *pSkyPS = nullptr;
     UINT   skyVsLen = 0, skyPsLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"skyshaders_VSMain.cso").c_str(), &pSkyVS, &skyVsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"skyshaders_PSMain.cso").c_str(), &pSkyPS, &skyPsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"skyshaders_VSMain.cso").c_str(), &pSkyVS, &skyVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"skyshaders_PSMain.cso").c_str(), &pSkyPS, &skyPsLen));
     m_skyDome = std::make_unique<SkyDome>();
     m_skyDome->InitPSO(m_device, m_rootSignature, m_width, m_height,
         pSkyVS, skyVsLen, pSkyPS, skyPsLen);
@@ -228,9 +228,9 @@ void D3D12HelloTriangle::LoadAssets()
     // VolumetricClouds
     UINT8 *pCloudVS = nullptr, *pCloudPS = nullptr, *pCloudCompositePS = nullptr;
     UINT   cloudVsLen = 0, cloudPsLen = 0, cloudCompositePsLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"clouds_CloudVS.cso").c_str(),     &pCloudVS,          &cloudVsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"clouds_CloudPS.cso").c_str(),     &pCloudPS,          &cloudPsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"clouds_CompositePS.cso").c_str(), &pCloudCompositePS, &cloudCompositePsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"clouds_CloudVS.cso").c_str(),     &pCloudVS,          &cloudVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"clouds_CloudPS.cso").c_str(),     &pCloudPS,          &cloudPsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"clouds_CompositePS.cso").c_str(), &pCloudCompositePS, &cloudCompositePsLen));
     m_volumetricClouds = std::make_unique<VolumetricClouds>();
     m_volumetricClouds->Init(m_device, m_width, m_height,
         pCloudVS, cloudVsLen, pCloudPS, cloudPsLen,
@@ -240,8 +240,8 @@ void D3D12HelloTriangle::LoadAssets()
     // RainbowEffect
     UINT8 *pRainbowVS = nullptr, *pRainbowPS = nullptr;
     UINT   rainbowVsLen = 0, rainbowPsLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"rainbow_RainbowVS.cso").c_str(), &pRainbowVS, &rainbowVsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"rainbow_RainbowPS.cso").c_str(), &pRainbowPS, &rainbowPsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"rainbow_RainbowVS.cso").c_str(), &pRainbowVS, &rainbowVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"rainbow_RainbowPS.cso").c_str(), &pRainbowPS, &rainbowPsLen));
     m_rainbowEffect = std::make_unique<RainbowEffect>();
     m_rainbowEffect->Init(m_device, m_width, m_height,
         pRainbowVS, rainbowVsLen, pRainbowPS, rainbowPsLen);
@@ -250,8 +250,8 @@ void D3D12HelloTriangle::LoadAssets()
     // RainSystem
     UINT8 *pRainVS = nullptr, *pRainPS = nullptr;
     UINT   rainVsLen = 0, rainPsLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"rain_VSMain.cso").c_str(),  &pRainVS, &rainVsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"rain_PSMain.cso").c_str(),  &pRainPS, &rainPsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"rain_VSMain.cso").c_str(),  &pRainVS, &rainVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"rain_PSMain.cso").c_str(),  &pRainPS, &rainPsLen));
     m_rainSystem = std::make_unique<RainSystem>();
     m_rainSystem->Init(m_device, m_rootSignature, pRainVS, rainVsLen, pRainPS, rainPsLen);
     m_rainSystem->InitResources(m_commandList);
@@ -262,8 +262,8 @@ void D3D12HelloTriangle::LoadAssets()
     // FloatingObject
     UINT8 *pFOVS = nullptr, *pFOPS = nullptr;
     UINT   foVsLen = 0, foPsLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"floating_object_FloatObjVS.cso").c_str(), &pFOVS, &foVsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"floating_object_FloatObjPS.cso").c_str(), &pFOPS, &foPsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"floating_object_FloatObjVS.cso").c_str(), &pFOVS, &foVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"floating_object_FloatObjPS.cso").c_str(), &pFOPS, &foPsLen));
     m_floatingObject = std::make_unique<FloatingObject>();
     m_floatingObject->Init(m_device, m_iblSystem.get(), m_oceanFFT->GetHeightMap(), pFOVS, foVsLen, pFOPS, foPsLen);
     free(pFOVS); free(pFOPS);
@@ -271,11 +271,11 @@ void D3D12HelloTriangle::LoadAssets()
     // ShipModel
     UINT8 *pShipVS = nullptr, *pShipPS = nullptr, *pShipShadowVS = nullptr;
     UINT   shipVsLen = 0, shipPsLen = 0, shipShadowVsLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"ship_ShipVS.cso").c_str(),
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"ship_ShipVS.cso").c_str(),
         &pShipVS, &shipVsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"ship_ShipPS.cso").c_str(),
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"ship_ShipPS.cso").c_str(),
         &pShipPS, &shipPsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"ship_ShipShadowVS.cso").c_str(),
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"ship_ShipShadowVS.cso").c_str(),
         &pShipShadowVS, &shipShadowVsLen));
     // GetAssetFullPath(L"") is the executable's directory; the GLTF asset lives at
     // <repo root>\Assets\, four levels up from <repo root>\HelloTriangle\bin\x64\Debug\.
@@ -299,8 +299,8 @@ void D3D12HelloTriangle::LoadAssets()
     // FishSchool
     UINT8 *pFishVS = nullptr, *pFishPS = nullptr;
     UINT   fishVsLen = 0, fishPsLen = 0;
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"fish_FishVS.cso").c_str(), &pFishVS, &fishVsLen));
-    ThrowIfFailed(ReadDataFromFile(GetAssetFullPath(L"fish_FishPS.cso").c_str(), &pFishPS, &fishPsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"fish_FishVS.cso").c_str(), &pFishVS, &fishVsLen));
+    ThrowIfFailed(ReadDataFromFile(GetShaderFullPath(L"fish_FishPS.cso").c_str(), &pFishPS, &fishPsLen));
     m_fishSchool = std::make_unique<FishSchool>();
     m_fishSchool->Init(m_device, m_iblSystem.get(), pFishVS, fishVsLen, pFishPS, fishPsLen);
     free(pFishVS); free(pFishPS);
