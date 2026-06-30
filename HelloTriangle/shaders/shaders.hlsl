@@ -453,7 +453,7 @@ float4 PSMain(VSOutput pin) : SV_TARGET
         float4x4 vp = mul(view, proj);
         float4 reflClip = mul(float4(pin.posW + reflectDir * 300.0, 1.0), vp);
         float2 reflUV = reflClip.xy / reflClip.w * float2(0.5, -0.5) + 0.5;
-        reflUV += N.xz * 0.018;
+        reflUV += N.xz * waterRefract;
         reflUV = saturate(reflUV);
 
         float2 edgeFade = saturate(min(reflUV, 1.0 - reflUV) * 6.0);

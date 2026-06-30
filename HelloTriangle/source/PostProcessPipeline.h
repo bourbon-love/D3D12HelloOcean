@@ -27,9 +27,9 @@ public:
     bool   lensFlareEnabled  = true;
     float  lensFlareStrength = 1.0f;
     bool   dofEnabled        = false;
-    float  dofFocusDepth     = 0.92f;
-    float  dofFocusRange     = 0.12f;
-    float  dofMaxRadius      = 0.010f;
+    float  dofFocusDepth     = 0.90f;
+    float  dofFocusRange     = 0.04f;
+    float  dofMaxRadius      = 0.018f;
     bool   ssaoEnabled       = true;
     float  ssaoStrength      = 0.8f;
     float  ssaoRadius        = 0.5f;
@@ -42,7 +42,7 @@ public:
     float  shadowStrength    = 0.75f;
     float  shadowBias        = 0.002f;
     float  waterBodyStr      = 1.0f;
-    float  waterRefract      = 0.028f;
+    float  waterRefract      = 0.018f;
     float  waterMinTrans     = 0.25f;
 
     // Phase 1: device + resolution only
